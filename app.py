@@ -1,7 +1,9 @@
 import streamlit as st
 import gspread
+import json
+import time  # 10초 대기를 위해 추가
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time as dt_time
 
 # --- 1. 기본 설정 ---
 JSON_FILE = "key.json" 
@@ -15,28 +17,40 @@ st.markdown("""
     .block-container { padding-top: 6rem; padding-bottom: 5rem; }
     h1 { text-align: center; font-size: 1.8rem !important; margin-bottom: 10px; }
     .stButton button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
+    
     .status-box { background-color: #ffffff; border-radius: 10px; padding: 15px; margin-bottom: 20px; border: 1px solid #ddd; font-size: 14px; color: #000000 !important; }
     .status-header { font-weight: bold; color: #ff4b4b !important; margin-bottom: 10px; font-size: 16px; border-bottom: 2px solid #eee; padding-bottom: 5px; }
     .status-item { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #f0f0f0; }
     .notice-box { background-color: #fff3cd; color: #856404 !important; padding: 15px; border-radius: 5px; font-size: 13px; margin-bottom: 15px; line-height: 1.6; }
-    .success-box { background-color: #d4edda; color: #155724 !important; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; margin-top: 10px; text-align: center; }
+    
+    /* 예약 성공 메시지 박스 스타일 */
+    .success-message {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #c3e6cb;
+        text-align: center;
+        margin: 20px 0;
+        font-weight: bold;
+        font-size: 16px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
     div[data-baseweb="input"] { padding: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 (TOML 방식 적용) ---
+# --- 3. 구글 시트 연결 ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # [배포 환경] Secrets의 [gcp_service_account] 섹션을 딕셔너리로 가져옴
-        if "gcp_service_account" in st.secrets:
-            key_dict = dict(st.secrets["gcp_service_account"])
+        if "gcp_json" in st.secrets:
+            key_dict = json.loads(st.secrets["gcp_json"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-        # [로컬 환경] 내 컴퓨터 파일 사용
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
-            
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -109,13 +123,40 @@ def show_status(records_normal, records_reg):
     status_html += "</div>"
     st.markdown(status_html, unsafe_allow_html=True)
 
-# --- 7. 메인 UI ---
+# --- 7. 메인 UI 및 로직 ---
 st.title("공공인재학부 세미나실 대관시스템")
 with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
     st.markdown("""<div class="notice-box"><b>📁 대관 안내</b><br>- 일반대관: 최대 3주 뒤까지 신청 가능 (1일 3시간)<br>- 정기대관: 매월 1일 신청 (스터디 목적)<br><br><b>📁 이용 수칙</b><br>- 1인 대관 불가 / 선착순 마감 / 타 학과생 불가</div>""", unsafe_allow_html=True)
 
+# 데이터 로드 및 현황판 표시
 records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
+
+# -----------------------------------------------------------------------------
+# ★ [핵심] 예약 성공 메시지 표시 영역 (현황판과 신청탭 사이)
+# -----------------------------------------------------------------------------
+success_placeholder = st.empty()  # 빈 공간 확보
+
+if 'success_msg' in st.session_state and st.session_state['success_msg']:
+    with success_placeholder.container():
+        st.markdown("""
+        <div class="success-message">
+            ✅ 대관 완료되었습니다.<br>
+            세미나실 비밀번호는 0015*입니다.<br>
+            사용 후에는 정리정돈 및 문단속 부탁드립니다.
+        </div>
+        """, unsafe_allow_html=True)
+        st.balloons()
+    
+    # 10초 대기
+    time.sleep(10)
+    
+    # 메시지 삭제 및 상태 초기화
+    success_placeholder.empty()
+    st.session_state['success_msg'] = False
+    st.rerun() # 깔끔하게 다시 로드
+
+# -----------------------------------------------------------------------------
 
 tab1, tab2 = st.tabs(["📅 일반 예약", "📝 정기 대관 신청"])
 
@@ -134,8 +175,8 @@ with tab1:
     with c2: st.write("")
     
     t1, t2 = st.columns(2)
-    with t1: start_time = st.time_input("시작", value=time(14,0), step=600)
-    with t2: end_time = st.time_input("종료", value=time(16,0), step=600)
+    with t1: start_time = st.time_input("시작", value=dt_time(14,0), step=600)
+    with t2: end_time = st.time_input("종료", value=dt_time(16,0), step=600)
 
     st.caption("예약자 명단 (첫 번째가 대표자)")
     for i, p in enumerate(st.session_state.attendees):
@@ -160,34 +201,38 @@ with tab1:
         elif dur < 10: st.error("❌ 최소 10분")
         elif s_min >= e_min: st.error("❌ 종료시간 오류")
         else:
-            try:
-                overlap=False
-                if records_normal:
-                    for row in records_normal:
-                        if str(row.get('날짜','')).replace('.','-').strip() == date_str:
-                            es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
-                            if (s_min < ee) and (e_min > es): overlap=True; break
-                if not overlap and records_reg:
-                    kd = get_day_korean(date)
-                    for rr in records_reg[1:]:
-                        if len(rr)>6 and "~" in rr[4] and kd in rr[5]:
-                            ps, pe = rr[4].split("~")
-                            if ps.strip() <= date_str <= pe.strip():
-                                ts, te = rr[6].split("~")
-                                if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
-                
-                if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
-                else:
-                    cli = get_client()
-                    sht = cli.open(SHEET_NAME).worksheet("시트1")
-                    rep_n, rep_i = valid[0]['name'], valid[0]['id']
-                    others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
-                    s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
-                    sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
-                    st.cache_data.clear()
-                    st.success("✅ 예약 성공!")
-                    st.rerun()
-            except Exception as e: st.error(f"오류: {e}")
+            cli = get_client()
+            if not cli: st.error("❌ 서버 연결 실패")
+            else:
+                try:
+                    overlap=False
+                    if records_normal:
+                        for row in records_normal:
+                            if str(row.get('날짜','')).replace('.','-').strip() == date_str:
+                                es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
+                                if (s_min < ee) and (e_min > es): overlap=True; break
+                    if not overlap and records_reg:
+                        kd = get_day_korean(date)
+                        for rr in records_reg[1:]:
+                            if len(rr)>6 and "~" in rr[4] and kd in rr[5]:
+                                ps, pe = rr[4].split("~")
+                                if ps.strip() <= date_str <= pe.strip():
+                                    ts, te = rr[6].split("~")
+                                    if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
+                    
+                    if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
+                    else:
+                        sht = cli.open(SHEET_NAME).worksheet("시트1")
+                        rep_n, rep_i = valid[0]['name'], valid[0]['id']
+                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
+                        s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
+                        sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
+                        
+                        st.cache_data.clear()
+                        # ★ 성공 상태 설정 후 리런 (위쪽 메시지 표시를 위해)
+                        st.session_state['success_msg'] = True
+                        st.rerun()
+                except Exception as e: st.error(f"오류: {e}")
 
 # TAB 2: 정기 대관
 with tab2:
@@ -201,8 +246,8 @@ with tab2:
         with c2: ed = st.date_input("종료일")
         days = st.multiselect("요일", ["월","화","수","목","금","토","일"])
         tc1, tc2 = st.columns(2)
-        with tc1: rs = st.time_input("시작시간", time(18,0))
-        with tc2: re = st.time_input("종료시간", time(21,0))
+        with tc1: rs = st.time_input("시작시간", dt_time(18,0))
+        with tc2: re = st.time_input("종료시간", dt_time(21,0))
         purp = st.text_area("사용목적", height=80)
         if st.form_submit_button("신청서 제출"):
             if not tn or not days: st.error("필수 정보 입력")
@@ -219,3 +264,4 @@ with tab2:
                     st.success("✅ 신청 완료!")
                     st.rerun()
                 except: st.error("오류")
+
