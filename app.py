@@ -16,25 +16,57 @@ st.markdown("""
     .block-container { padding-top: 6rem; padding-bottom: 5rem; }
     h1 { text-align: center; font-size: 1.8rem !important; margin-bottom: 10px; }
     .stButton button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
-    .status-box { background-color: #ffffff; border-radius: 10px; padding: 15px; margin-bottom: 20px; border: 1px solid #ddd; font-size: 14px; color: #000000 !important; }
-    .status-header { font-weight: bold; color: #ff4b4b !important; margin-bottom: 10px; font-size: 16px; border-bottom: 2px solid #eee; padding-bottom: 5px; }
+    
+    .status-box {
+        background-color: #ffffff; 
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid #ddd;
+        font-size: 14px;
+        color: #000000 !important;
+    }
+    .status-header { 
+        font-weight: bold; 
+        color: #ff4b4b !important; 
+        margin-bottom: 10px; 
+        font-size: 16px;
+        border-bottom: 2px solid #eee;
+        padding-bottom: 5px;
+    }
     .status-item { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #f0f0f0; }
-    .notice-box { background-color: #fff3cd; color: #856404 !important; padding: 15px; border-radius: 5px; font-size: 13px; margin-bottom: 15px; line-height: 1.6; }
-    .success-box { background-color: #d4edda; color: #155724 !important; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; margin-top: 10px; text-align: center; }
+    .notice-box {
+        background-color: #fff3cd;
+        color: #856404 !important;
+        padding: 15px;
+        border-radius: 5px;
+        font-size: 13px;
+        margin-bottom: 15px;
+        line-height: 1.6;
+    }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724 !important;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #c3e6cb;
+        margin-top: 10px;
+        text-align: center;
+    }
     div[data-baseweb="input"] { padding: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 (수정된 로직) ---
+# --- 3. 구글 시트 연결 (만능 코드) ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # [수정됨] 배포 환경: gcp_json이라는 통짜 문자열을 받아서 JSON으로 변환
+        # [배포 환경] Secrets에 gcp_json이라는 이름으로 통째로 들어있는 경우
         if "gcp_json" in st.secrets:
             key_dict = json.loads(st.secrets["gcp_json"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-        # 로컬 환경
+        # [로컬 환경] 내 컴퓨터 파일 사용
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
             
@@ -184,7 +216,7 @@ with tab1:
                     rep_n, rep_i = valid[0]['name'], valid[0]['id']
                     others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
                     s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
-                    sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
+                    sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
                     st.cache_data.clear()
                     st.success("✅ 예약 성공!")
                     st.rerun()
