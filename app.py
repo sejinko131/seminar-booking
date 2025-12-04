@@ -16,63 +16,39 @@ st.markdown("""
     .block-container { padding-top: 6rem; padding-bottom: 5rem; }
     h1 { text-align: center; font-size: 1.8rem !important; margin-bottom: 10px; }
     .stButton button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
-    
-    .status-box {
-        background-color: #ffffff; 
-        border-radius: 10px;
-        padding: 15px;
-        margin-bottom: 20px;
-        border: 1px solid #ddd;
-        font-size: 14px;
-        color: #000000 !important;
-    }
-    .status-header { 
-        font-weight: bold; 
-        color: #ff4b4b !important; 
-        margin-bottom: 10px; 
-        font-size: 16px;
-        border-bottom: 2px solid #eee;
-        padding-bottom: 5px;
-    }
+    .status-box { background-color: #ffffff; border-radius: 10px; padding: 15px; margin-bottom: 20px; border: 1px solid #ddd; font-size: 14px; color: #000000 !important; }
+    .status-header { font-weight: bold; color: #ff4b4b !important; margin-bottom: 10px; font-size: 16px; border-bottom: 2px solid #eee; padding-bottom: 5px; }
     .status-item { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #f0f0f0; }
-    .notice-box {
-        background-color: #fff3cd;
-        color: #856404 !important;
-        padding: 15px;
-        border-radius: 5px;
-        font-size: 13px;
-        margin-bottom: 15px;
-        line-height: 1.6;
-    }
-    .success-box {
-        background-color: #d4edda;
-        color: #155724 !important;
-        padding: 20px;
-        border-radius: 10px;
-        border: 1px solid #c3e6cb;
-        margin-top: 10px;
-        text-align: center;
-    }
+    .notice-box { background-color: #fff3cd; color: #856404 !important; padding: 15px; border-radius: 5px; font-size: 13px; margin-bottom: 15px; line-height: 1.6; }
+    .success-box { background-color: #d4edda; color: #155724 !important; padding: 20px; border-radius: 10px; border: 1px solid #c3e6cb; margin-top: 10px; text-align: center; }
     div[data-baseweb="input"] { padding: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 (만능 코드) ---
+# --- 3. 구글 시트 연결 (디버깅 모드) ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # [배포 환경] Secrets에 gcp_json이라는 이름으로 통째로 들어있는 경우
+        # [1] Secrets 확인 (gcp_json)
         if "gcp_json" in st.secrets:
-            key_dict = json.loads(st.secrets["gcp_json"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-        # [로컬 환경] 내 컴퓨터 파일 사용
+            try:
+                key_dict = json.loads(st.secrets["gcp_json"])
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
+            except Exception as e:
+                st.error(f"❌ Secrets JSON 파싱 오류: {e}")
+                return None
+        
+        # [2] 로컬 파일 확인
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
             
         client = gspread.authorize(creds)
         return client
+
     except Exception as e:
+        # 여기에 뜨는 에러 메시지를 알려주세요!
+        st.error(f"❌ 연결 초기화 실패: {e}")
         return None
 
 # --- 4. 데이터 캐싱 ---
@@ -87,7 +63,9 @@ def load_data():
         try: ws2 = sheet.worksheet("정기대관_신청"); data2 = ws2.get_all_values()
         except: data2 = []
         return data1, data2
-    except: return None, None
+    except Exception as e:
+        st.error(f"❌ 시트 열기 실패: {e}") # 시트 이름 틀렸을 때
+        return None, None
 
 # --- 5. 헬퍼 함수 ---
 def to_min(v):
@@ -128,7 +106,7 @@ def show_status(records_normal, records_reg):
         if not future: status_html += "<div class='status-item' style='color:#999;'>예정된 예약이 없습니다.</div>"
         else:
             for item in future[:10]: status_html += f"<div class='status-item'>{item['s']}</div>"
-    else: status_html += "<div class='status-item' style='color:red;'>서버 연결 실패</div>"
+    else: status_html += "<div class='status-item' style='color:red;'>데이터 로딩 실패</div>"
     
     status_html += "<br><div class='status-header'>▪️ 정기대관 (학기 중)</div>"
     has_reg = False
@@ -193,34 +171,38 @@ with tab1:
         elif dur < 10: st.error("❌ 최소 10분")
         elif s_min >= e_min: st.error("❌ 종료시간 오류")
         else:
-            try:
-                overlap=False
-                if records_normal:
-                    for row in records_normal:
-                        if str(row.get('날짜','')).replace('.','-').strip() == date_str:
-                            es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
-                            if (s_min < ee) and (e_min > es): overlap=True; break
-                if not overlap and records_reg:
-                    kd = get_day_korean(date)
-                    for rr in records_reg[1:]:
-                        if len(rr)>6 and "~" in rr[4] and kd in rr[5]:
-                            ps, pe = rr[4].split("~")
-                            if ps.strip() <= date_str <= pe.strip():
-                                ts, te = rr[6].split("~")
-                                if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
-                
-                if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
-                else:
-                    cli = get_client()
-                    sht = cli.open(SHEET_NAME).worksheet("시트1")
-                    rep_n, rep_i = valid[0]['name'], valid[0]['id']
-                    others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
-                    s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
-                    sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
-                    st.cache_data.clear()
-                    st.success("✅ 예약 성공!")
-                    st.rerun()
-            except Exception as e: st.error(f"오류: {e}")
+            cli = get_client()
+            if not cli:
+                st.error("❌ 서버 연결 실패 (관리자에게 문의하세요)")
+            else:
+                try:
+                    overlap=False
+                    # 캐시된 데이터로 중복 검사
+                    if records_normal:
+                        for row in records_normal:
+                            if str(row.get('날짜','')).replace('.','-').strip() == date_str:
+                                es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
+                                if (s_min < ee) and (e_min > es): overlap=True; break
+                    if not overlap and records_reg:
+                        kd = get_day_korean(date)
+                        for rr in records_reg[1:]:
+                            if len(rr)>6 and "~" in rr[4] and kd in rr[5]:
+                                ps, pe = rr[4].split("~")
+                                if ps.strip() <= date_str <= pe.strip():
+                                    ts, te = rr[6].split("~")
+                                    if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
+                    
+                    if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
+                    else:
+                        sht = cli.open(SHEET_NAME).worksheet("시트1")
+                        rep_n, rep_i = valid[0]['name'], valid[0]['id']
+                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
+                        s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
+                        sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
+                        st.cache_data.clear()
+                        st.success("✅ 예약 성공!")
+                        st.rerun()
+                except Exception as e: st.error(f"오류: {e}")
 
 # TAB 2: 정기 대관
 with tab2:
@@ -240,15 +222,18 @@ with tab2:
         if st.form_submit_button("신청서 제출"):
             if not tn or not days: st.error("필수 정보 입력")
             else:
-                try:
-                    cli = get_client()
-                    sr = cli.open(SHEET_NAME).worksheet("정기대관_신청")
-                    now = datetime.now().strftime("%Y-%m-%d")
-                    p_str = f"{sd} ~ {ed}"
-                    d_str = ", ".join(days)
-                    t_str = f"{rs.strftime('%H:%M')} ~ {re.strftime('%H:%M')}"
-                    sr.append_row([now, tn, ln, ct, p_str, d_str, t_str, purp])
-                    st.cache_data.clear()
-                    st.success("✅ 신청 완료!")
-                    st.rerun()
-                except: st.error("오류")
+                cli = get_client()
+                if not cli:
+                    st.error("❌ 서버 연결 실패")
+                else:
+                    try:
+                        sr = cli.open(SHEET_NAME).worksheet("정기대관_신청")
+                        now = datetime.now().strftime("%Y-%m-%d")
+                        p_str = f"{sd} ~ {ed}"
+                        d_str = ", ".join(days)
+                        t_str = f"{rs.strftime('%H:%M')} ~ {re.strftime('%H:%M')}"
+                        sr.append_row([now, tn, ln, ct, p_str, d_str, t_str, purp])
+                        st.cache_data.clear()
+                        st.success("✅ 신청 완료!")
+                        st.rerun()
+                    except: st.error("오류")
