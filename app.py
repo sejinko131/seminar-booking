@@ -1,7 +1,6 @@
 import streamlit as st
 import gspread
-import json
-import time  # 10초 대기를 위해 추가
+import time
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, time as dt_time
 
@@ -23,7 +22,6 @@ st.markdown("""
     .status-item { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #f0f0f0; }
     .notice-box { background-color: #fff3cd; color: #856404 !important; padding: 15px; border-radius: 5px; font-size: 13px; margin-bottom: 15px; line-height: 1.6; }
     
-    /* 예약 성공 메시지 박스 스타일 */
     .success-message {
         background-color: #d4edda;
         color: #155724;
@@ -41,16 +39,19 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 ---
+# --- 3. 구글 시트 연결 (TOML 방식 - 가장 안정적) ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        if "gcp_json" in st.secrets:
-            key_dict = json.loads(st.secrets["gcp_json"])
+        # [배포 환경] Secrets의 [gcp_service_account] 섹션을 딕셔너리로 바로 가져옴
+        if "gcp_service_account" in st.secrets:
+            key_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
+        # [로컬 환경] 내 컴퓨터 파일 사용
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
+            
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -132,10 +133,8 @@ with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
 records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
 
-# -----------------------------------------------------------------------------
-# ★ [핵심] 예약 성공 메시지 표시 영역 (현황판과 신청탭 사이)
-# -----------------------------------------------------------------------------
-success_placeholder = st.empty()  # 빈 공간 확보
+# ★ [핵심] 예약 성공 메시지 표시 영역
+success_placeholder = st.empty()
 
 if 'success_msg' in st.session_state and st.session_state['success_msg']:
     with success_placeholder.container():
@@ -148,15 +147,10 @@ if 'success_msg' in st.session_state and st.session_state['success_msg']:
         """, unsafe_allow_html=True)
         st.balloons()
     
-    # 10초 대기
     time.sleep(10)
-    
-    # 메시지 삭제 및 상태 초기화
     success_placeholder.empty()
     st.session_state['success_msg'] = False
-    st.rerun() # 깔끔하게 다시 로드
-
-# -----------------------------------------------------------------------------
+    st.rerun()
 
 tab1, tab2 = st.tabs(["📅 일반 예약", "📝 정기 대관 신청"])
 
@@ -229,7 +223,6 @@ with tab1:
                         sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
                         
                         st.cache_data.clear()
-                        # ★ 성공 상태 설정 후 리런 (위쪽 메시지 표시를 위해)
                         st.session_state['success_msg'] = True
                         st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
@@ -264,4 +257,5 @@ with tab2:
                     st.success("✅ 신청 완료!")
                     st.rerun()
                 except: st.error("오류")
+
 
