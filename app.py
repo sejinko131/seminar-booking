@@ -154,6 +154,7 @@ tab1, tab2 = st.tabs(["📅 일반 예약", "📝 정기 대관 신청"])
 
 # TAB 1: 일반 예약
 with tab1:
+    # 기본 2명으로 초기화 (최소 2인이므로)
     if 'attendees' not in st.session_state: st.session_state.attendees = [{"name": "", "id": ""}, {"name": "", "id": ""}]
     def add_attendee(): st.session_state.attendees.append({"name": "", "id": ""})
     def remove_last(): 
@@ -191,49 +192,38 @@ with tab1:
             
         valid_users = [p for p in st.session_state.attendees if p['name'] and p['id']]
         
-        # 1. 기본 유효성 검사
-        if len(valid_users) < 1: st.error("❌ 최소 1명 입력 필수")
-        elif dur > 180: st.error("❌ 최대 3시간")
+        # 1. 기본 유효성 검사 (★ 수정된 부분: 최소 2인 검사)
+        if len(valid_users) < 2: 
+            st.error("❌ 최소 2인 이상 입력해야 합니다. (1인 대관 불가)")
+        elif dur > 180: st.error("❌ 하루 최대 3시간까지만 가능합니다.")
         elif dur < 10: st.error("❌ 최소 10분")
         else:
             cli = get_client()
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
-                    # 대표자 정보 추출 (이름 + 학번 기준)
+                    # 대표자 정보 추출
                     rep_name = valid_users[0]['name'].strip()
                     rep_id = valid_users[0]['id'].strip()
                     
-                    # --- [추가된 로직] 대표자 1일 총량제 검사 (3시간 제한) ---
+                    # --- 대표자 1일 총량제 (3시간) ---
                     total_usage_min = 0
                     if records_normal:
                         for row in records_normal:
-                            # 1. 같은 날짜인지 확인
-                            r_d = str(row.get('날짜','')).replace('.','-').strip()
-                            if r_d == date_str:
-                                # 2. 같은 대표자인지 확인 (이름과 학번이 모두 같아야 함)
+                            if str(row.get('날짜','')).replace('.','-').strip() == date_str:
                                 r_n = str(row.get('대표자명','')).strip()
                                 r_i = str(row.get('대표학번','')).strip()
-                                
                                 if r_n == rep_name and r_i == rep_id:
-                                    # 3. 기존 사용 시간 계산
                                     es = to_min(row.get('시작시간'))
                                     ee = to_min(row.get('종료시간'))
-                                    
-                                    # 철야 고려한 시간 계산
-                                    if ee < es: usage = (24*60 - es) + ee
-                                    else: usage = ee - es
-                                    
+                                    usage = (24*60 - es) + ee if ee < es else ee - es
                                     total_usage_min += usage
                     
-                    # 4. (기존 사용량 + 현재 신청량) > 180분이면 차단
                     if total_usage_min + dur > 180:
-                        st.error(f"❌ 1일 최대 3시간 초과!\n(기존 예약: {total_usage_min}분 + 현재 신청: {dur}분 = 총 {total_usage_min + dur}분)")
-                        st.stop() # 여기서 멈춤
-                    # -----------------------------------------------------
+                        st.error(f"❌ 1일 최대 3시간 초과!\n(기존: {total_usage_min}분 + 신청: {dur}분 = 총 {total_usage_min + dur}분)")
+                        st.stop()
 
                     overlap=False
-                    # 일반 예약 중복 검사
                     req_start_dt = datetime.combine(date, start_time)
                     req_end_dt = datetime.combine(date + timedelta(days=1 if e_min < s_min else 0), end_time)
 
@@ -243,15 +233,12 @@ with tab1:
                                 r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').strip(), "%Y-%m-%d").date()
                                 es = to_min(row.get('시작시간'))
                                 ee = to_min(row.get('종료시간'))
-                                
                                 exist_start_dt = datetime.combine(r_d, dt_time(hour=es//60, minute=es%60))
                                 exist_end_dt = datetime.combine(r_d + timedelta(days=1 if ee < es else 0), dt_time(hour=ee//60, minute=ee%60))
-                                
                                 if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
                                     overlap=True; break
                             except: continue
 
-                    # 정기 대관 중복 검사
                     if not overlap and records_reg:
                         kd = get_day_korean(date)
                         for rr in records_reg[1:]:
@@ -261,17 +248,15 @@ with tab1:
                                     ts, te = rr[6].split("~")
                                     reg_s = to_min(ts.strip())
                                     reg_e = to_min(te.strip())
-                                    
                                     reg_start_dt = datetime.combine(date, dt_time(hour=reg_s//60, minute=reg_s%60))
                                     reg_end_dt = datetime.combine(date + timedelta(days=1 if reg_e < reg_s else 0), dt_time(hour=reg_e//60, minute=reg_e%60))
-                                    
                                     if (req_start_dt < reg_end_dt) and (req_end_dt > reg_start_dt):
                                         overlap=True; break
                     
                     if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
                     else:
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
-                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]]) if len(valid_users)>1 else "없음"
+                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]])
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
                         sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
                         st.cache_data.clear()
