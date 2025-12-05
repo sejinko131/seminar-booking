@@ -1,6 +1,5 @@
 import streamlit as st
 import gspread
-import time
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, time as dt_time
 
@@ -39,19 +38,16 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 (TOML 방식 - 가장 안정적) ---
+# --- 3. 구글 시트 연결 (TOML 방식) ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # [배포 환경] Secrets의 [gcp_service_account] 섹션을 딕셔너리로 바로 가져옴
         if "gcp_service_account" in st.secrets:
             key_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-        # [로컬 환경] 내 컴퓨터 파일 사용
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
-            
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -85,7 +81,7 @@ def to_min(v):
 def get_day_korean(date_obj): return ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
 def mask_name(name): return (str(name).strip()[0] + "**") if len(str(name).strip()) > 1 else str(name)
 
-# --- 6. 현황판 ---
+# --- 6. 현황판 (정렬 기능 강화) ---
 def show_status(records_normal, records_reg):
     st.markdown("#### 📅 세미나실 대관현황")
     status_html = "<div class='status-box'>"
@@ -96,17 +92,32 @@ def show_status(records_normal, records_reg):
         future = []
         for row in records_normal:
             try:
+                # 날짜 파싱
                 r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').replace('/','-').strip(), "%Y-%m-%d").date()
                 if r_d >= today:
                     name = str(row.get('대표자명', ''))
-                    start = str(row.get('시작시간', ''))
-                    end = str(row.get('종료시간', ''))
+                    start_str = str(row.get('시작시간', ''))
+                    end_str = str(row.get('종료시간', ''))
+                    
+                    # 시작 시간(분) 계산 (정렬용)
+                    s_min = to_min(start_str)
+                    
                     disp = mask_name(name) if name else "예약자"
-                    if start and end:
-                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start} - {end}"
-                        future.append({"d": r_d, "s": item})
+                    
+                    if start_str and end_str:
+                        # [철야 예약 표시] 종료 시간이 시작 시간보다 작으면 (+1일) 표시
+                        e_min = to_min(end_str)
+                        overnight_mark = " (+1)" if e_min < s_min else ""
+                        
+                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start_str} - {end_str}{overnight_mark}"
+                        
+                        # 정렬 키: (날짜, 시작시간) 튜플
+                        future.append({"key": (r_d, s_min), "s": item})
             except: continue
-        future.sort(key=lambda x: x['d'])
+            
+        # ★ [수정됨] 날짜 먼저, 그다음 시간 순으로 정렬
+        future.sort(key=lambda x: x['key'])
+        
         if not future: status_html += "<div class='status-item' style='color:#999;'>예정된 예약이 없습니다.</div>"
         else:
             for item in future[:10]: status_html += f"<div class='status-item'>{item['s']}</div>"
@@ -124,18 +135,16 @@ def show_status(records_normal, records_reg):
     status_html += "</div>"
     st.markdown(status_html, unsafe_allow_html=True)
 
-# --- 7. 메인 UI 및 로직 ---
+# --- 7. 메인 UI ---
 st.title("공공인재학부 세미나실 대관시스템")
 with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
     st.markdown("""<div class="notice-box"><b>📁 대관 안내</b><br>- 일반대관: 최대 3주 뒤까지 신청 가능 (1일 3시간)<br>- 정기대관: 매월 1일 신청 (스터디 목적)<br><br><b>📁 이용 수칙</b><br>- 1인 대관 불가 / 선착순 마감 / 타 학과생 불가</div>""", unsafe_allow_html=True)
 
-# 데이터 로드 및 현황판 표시
 records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
 
-# ★ [핵심] 예약 성공 메시지 표시 영역
+# 예약 성공 메시지
 success_placeholder = st.empty()
-
 if 'success_msg' in st.session_state and st.session_state['success_msg']:
     with success_placeholder.container():
         st.markdown("""
@@ -146,7 +155,6 @@ if 'success_msg' in st.session_state and st.session_state['success_msg']:
         </div>
         """, unsafe_allow_html=True)
         st.balloons()
-    
     time.sleep(10)
     success_placeholder.empty()
     st.session_state['success_msg'] = False
@@ -187,24 +195,46 @@ with tab1:
     if st.button("📅 예약 신청하기", type="primary"):
         s_min = to_min(f"{start_time.hour}:{start_time.minute}")
         e_min = to_min(f"{end_time.hour}:{end_time.minute}")
-        dur = e_min - s_min
+        
+        # ★ [수정됨] 철야 예약 시간 계산 (종료가 시작보다 빠르면 다음날로 계산)
+        if e_min < s_min:
+            dur = (24 * 60 - s_min) + e_min
+        else:
+            dur = e_min - s_min
+            
         valid = [p for p in st.session_state.attendees if p['name'] and p['id']]
         
         if len(valid)<1: st.error("❌ 최소 1명 입력 필수")
         elif dur > 180: st.error("❌ 최대 3시간")
         elif dur < 10: st.error("❌ 최소 10분")
-        elif s_min >= e_min: st.error("❌ 종료시간 오류")
+        # elif s_min >= e_min: st.error("❌ 종료시간 오류") -> [삭제됨] 철야 허용 위해 삭제
         else:
             cli = get_client()
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
                     overlap=False
+                    # [중복 검사 로직 강화] 타임스탬프로 변환해서 비교
+                    req_start_dt = datetime.combine(date, start_time)
+                    # 종료 시간이 시작보다 작으면(새벽) 날짜 하루 더함
+                    req_end_dt = datetime.combine(date + timedelta(days=1 if e_min < s_min else 0), end_time)
+
                     if records_normal:
                         for row in records_normal:
-                            if str(row.get('날짜','')).replace('.','-').strip() == date_str:
-                                es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
-                                if (s_min < ee) and (e_min > es): overlap=True; break
+                            try:
+                                r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').strip(), "%Y-%m-%d").date()
+                                es = to_min(row.get('시작시간'))
+                                ee = to_min(row.get('종료시간'))
+                                
+                                # 기존 예약의 타임스탬프 계산
+                                exist_start_dt = datetime.combine(r_d, dt_time(hour=es//60, minute=es%60))
+                                exist_end_dt = datetime.combine(r_d + timedelta(days=1 if ee < es else 0), dt_time(hour=ee//60, minute=ee%60))
+                                
+                                # 시간 겹침 공식: (내시작 < 남종료) AND (내종료 > 남시작)
+                                if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
+                                    overlap=True; break
+                            except: continue
+
                     if not overlap and records_reg:
                         kd = get_day_korean(date)
                         for rr in records_reg[1:]:
@@ -212,7 +242,15 @@ with tab1:
                                 ps, pe = rr[4].split("~")
                                 if ps.strip() <= date_str <= pe.strip():
                                     ts, te = rr[6].split("~")
-                                    if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
+                                    reg_s = to_min(ts.strip())
+                                    reg_e = to_min(te.strip())
+                                    
+                                    # 정기대관 타임스탬프 (당일 기준)
+                                    reg_start_dt = datetime.combine(date, dt_time(hour=reg_s//60, minute=reg_s%60))
+                                    reg_end_dt = datetime.combine(date + timedelta(days=1 if reg_e < reg_s else 0), dt_time(hour=reg_e//60, minute=reg_e%60))
+                                    
+                                    if (req_start_dt < reg_end_dt) and (req_end_dt > reg_start_dt):
+                                        overlap=True; break
                     
                     if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
                     else:
@@ -221,7 +259,6 @@ with tab1:
                         others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
                         sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
-                        
                         st.cache_data.clear()
                         st.session_state['success_msg'] = True
                         st.rerun()
@@ -257,5 +294,3 @@ with tab2:
                     st.success("✅ 신청 완료!")
                     st.rerun()
                 except: st.error("오류")
-
-
