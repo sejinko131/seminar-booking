@@ -1,5 +1,6 @@
 import streamlit as st
 import gspread
+import time
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, time as dt_time
 
@@ -38,7 +39,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 (TOML 방식) ---
+# --- 3. 구글 시트 연결 ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -81,7 +82,7 @@ def to_min(v):
 def get_day_korean(date_obj): return ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
 def mask_name(name): return (str(name).strip()[0] + "**") if len(str(name).strip()) > 1 else str(name)
 
-# --- 6. 현황판 (정렬 기능 강화) ---
+# --- 6. 현황판 ---
 def show_status(records_normal, records_reg):
     st.markdown("#### 📅 세미나실 대관현황")
     status_html = "<div class='status-box'>"
@@ -92,32 +93,22 @@ def show_status(records_normal, records_reg):
         future = []
         for row in records_normal:
             try:
-                # 날짜 파싱
                 r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').replace('/','-').strip(), "%Y-%m-%d").date()
                 if r_d >= today:
                     name = str(row.get('대표자명', ''))
-                    start_str = str(row.get('시작시간', ''))
-                    end_str = str(row.get('종료시간', ''))
-                    
-                    # 시작 시간(분) 계산 (정렬용)
-                    s_min = to_min(start_str)
-                    
+                    start = str(row.get('시작시간', ''))
+                    end = str(row.get('종료시간', ''))
                     disp = mask_name(name) if name else "예약자"
                     
-                    if start_str and end_str:
-                        # [철야 예약 표시] 종료 시간이 시작 시간보다 작으면 (+1일) 표시
-                        e_min = to_min(end_str)
-                        overnight_mark = " (+1)" if e_min < s_min else ""
-                        
-                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start_str} - {end_str}{overnight_mark}"
-                        
-                        # 정렬 키: (날짜, 시작시간) 튜플
+                    s_min = to_min(start)
+                    e_min = to_min(end)
+                    overnight = " (+1)" if e_min < s_min else ""
+                    
+                    if start and end:
+                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start} - {end}{overnight}"
                         future.append({"key": (r_d, s_min), "s": item})
             except: continue
-            
-        # ★ [수정됨] 날짜 먼저, 그다음 시간 순으로 정렬
         future.sort(key=lambda x: x['key'])
-        
         if not future: status_html += "<div class='status-item' style='color:#999;'>예정된 예약이 없습니다.</div>"
         else:
             for item in future[:10]: status_html += f"<div class='status-item'>{item['s']}</div>"
@@ -143,7 +134,6 @@ with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
 records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
 
-# 예약 성공 메시지
 success_placeholder = st.empty()
 if 'success_msg' in st.session_state and st.session_state['success_msg']:
     with success_placeholder.container():
@@ -196,27 +186,55 @@ with tab1:
         s_min = to_min(f"{start_time.hour}:{start_time.minute}")
         e_min = to_min(f"{end_time.hour}:{end_time.minute}")
         
-        # ★ [수정됨] 철야 예약 시간 계산 (종료가 시작보다 빠르면 다음날로 계산)
-        if e_min < s_min:
-            dur = (24 * 60 - s_min) + e_min
-        else:
-            dur = e_min - s_min
+        if e_min < s_min: dur = (24 * 60 - s_min) + e_min
+        else: dur = e_min - s_min
             
-        valid = [p for p in st.session_state.attendees if p['name'] and p['id']]
+        valid_users = [p for p in st.session_state.attendees if p['name'] and p['id']]
         
-        if len(valid)<1: st.error("❌ 최소 1명 입력 필수")
+        # 1. 기본 유효성 검사
+        if len(valid_users) < 1: st.error("❌ 최소 1명 입력 필수")
         elif dur > 180: st.error("❌ 최대 3시간")
         elif dur < 10: st.error("❌ 최소 10분")
-        # elif s_min >= e_min: st.error("❌ 종료시간 오류") -> [삭제됨] 철야 허용 위해 삭제
         else:
             cli = get_client()
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
+                    # 대표자 정보 추출 (이름 + 학번 기준)
+                    rep_name = valid_users[0]['name'].strip()
+                    rep_id = valid_users[0]['id'].strip()
+                    
+                    # --- [추가된 로직] 대표자 1일 총량제 검사 (3시간 제한) ---
+                    total_usage_min = 0
+                    if records_normal:
+                        for row in records_normal:
+                            # 1. 같은 날짜인지 확인
+                            r_d = str(row.get('날짜','')).replace('.','-').strip()
+                            if r_d == date_str:
+                                # 2. 같은 대표자인지 확인 (이름과 학번이 모두 같아야 함)
+                                r_n = str(row.get('대표자명','')).strip()
+                                r_i = str(row.get('대표학번','')).strip()
+                                
+                                if r_n == rep_name and r_i == rep_id:
+                                    # 3. 기존 사용 시간 계산
+                                    es = to_min(row.get('시작시간'))
+                                    ee = to_min(row.get('종료시간'))
+                                    
+                                    # 철야 고려한 시간 계산
+                                    if ee < es: usage = (24*60 - es) + ee
+                                    else: usage = ee - es
+                                    
+                                    total_usage_min += usage
+                    
+                    # 4. (기존 사용량 + 현재 신청량) > 180분이면 차단
+                    if total_usage_min + dur > 180:
+                        st.error(f"❌ 1일 최대 3시간 초과!\n(기존 예약: {total_usage_min}분 + 현재 신청: {dur}분 = 총 {total_usage_min + dur}분)")
+                        st.stop() # 여기서 멈춤
+                    # -----------------------------------------------------
+
                     overlap=False
-                    # [중복 검사 로직 강화] 타임스탬프로 변환해서 비교
+                    # 일반 예약 중복 검사
                     req_start_dt = datetime.combine(date, start_time)
-                    # 종료 시간이 시작보다 작으면(새벽) 날짜 하루 더함
                     req_end_dt = datetime.combine(date + timedelta(days=1 if e_min < s_min else 0), end_time)
 
                     if records_normal:
@@ -226,15 +244,14 @@ with tab1:
                                 es = to_min(row.get('시작시간'))
                                 ee = to_min(row.get('종료시간'))
                                 
-                                # 기존 예약의 타임스탬프 계산
                                 exist_start_dt = datetime.combine(r_d, dt_time(hour=es//60, minute=es%60))
                                 exist_end_dt = datetime.combine(r_d + timedelta(days=1 if ee < es else 0), dt_time(hour=ee//60, minute=ee%60))
                                 
-                                # 시간 겹침 공식: (내시작 < 남종료) AND (내종료 > 남시작)
                                 if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
                                     overlap=True; break
                             except: continue
 
+                    # 정기 대관 중복 검사
                     if not overlap and records_reg:
                         kd = get_day_korean(date)
                         for rr in records_reg[1:]:
@@ -245,7 +262,6 @@ with tab1:
                                     reg_s = to_min(ts.strip())
                                     reg_e = to_min(te.strip())
                                     
-                                    # 정기대관 타임스탬프 (당일 기준)
                                     reg_start_dt = datetime.combine(date, dt_time(hour=reg_s//60, minute=reg_s%60))
                                     reg_end_dt = datetime.combine(date + timedelta(days=1 if reg_e < reg_s else 0), dt_time(hour=reg_e//60, minute=reg_e%60))
                                     
@@ -255,10 +271,9 @@ with tab1:
                     if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
                     else:
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
-                        rep_n, rep_i = valid[0]['name'], valid[0]['id']
-                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
+                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]]) if len(valid_users)>1 else "없음"
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
-                        sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
+                        sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
                         st.cache_data.clear()
                         st.session_state['success_msg'] = True
                         st.rerun()
