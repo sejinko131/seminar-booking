@@ -68,13 +68,21 @@ def load_data():
         return data1, data2
     except: return None, None
 
-# --- 5. 헬퍼 함수 ---
+# --- 5. 헬퍼 함수 (시간 변환 강화) ---
 def to_min(v):
+    """
+    시간 문자열을 분(minute)으로 변환 (HH:MM:SS도 처리 가능하도록 개선)
+    """
     try:
         if isinstance(v, int): return v * 60
         if isinstance(v, str):
             v = v.strip()
-            if ':' in v: h, m = map(int, v.split(':')); return h * 60 + m
+            # 14:30:00 같은 경우 앞의 14:30만 잘라서 씀
+            if ':' in v:
+                parts = v.split(':')
+                h = int(parts[0])
+                m = int(parts[1])
+                return h * 60 + m
             if v.isdigit(): return int(v) * 60
     except: pass
     return 0
@@ -103,6 +111,7 @@ def show_status(records_normal, records_reg):
                     s_min = to_min(start)
                     e_min = to_min(end)
                     
+                    # 철야 표시 로직
                     if e_min < s_min:
                         end_dt = datetime.combine(r_d + timedelta(days=1), dt_time(hour=e_min//60, minute=e_min%60))
                         overnight = " (+1)"
@@ -192,12 +201,12 @@ with tab1:
         s_min = to_min(f"{start_time.hour}:{start_time.minute}")
         e_min = to_min(f"{end_time.hour}:{end_time.minute}")
         
+        # 철야 시간 계산 (종료 < 시작이면 다음날로 간주하여 시간 더함)
         if e_min < s_min: dur = (24 * 60 - s_min) + e_min
         else: dur = e_min - s_min
             
         valid_users = [p for p in st.session_state.attendees if p['name'] and p['id']]
         
-        # 기본 유효성 검사
         if len(valid_users) < 2: st.error("❌ 최소 2인 이상 입력해야 합니다. (1인 대관 불가)")
         elif dur > 180: st.error("❌ 하루 최대 3시간까지만 가능합니다.")
         elif dur < 10: st.error("❌ 최소 10분")
@@ -206,48 +215,48 @@ with tab1:
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
-                    # [1] 현재 신청 그룹 생성 (순서 무관한 집합)
-                    # "홍길동 1234" 문자열의 집합으로 만듦
-                    current_group_set = set()
-                    for u in valid_users:
-                        current_group_set.add(f"{u['name'].strip()} {u['id'].strip()}")
-
-                    # [2] 동일 그룹 1일 총량제 검사
-                    total_usage_min = 0
-                    
+                    # [1] 개인별 누적 사용량 전수 조사 (철야 포함)
+                    block_msg = ""
                     if records_normal:
-                        for row in records_normal:
-                            # 날짜 일치 확인
-                            if str(row.get('날짜','')).replace('.','-').strip() == date_str:
-                                # 해당 기록의 그룹 생성
-                                record_group_set = set()
-                                
-                                # 대표자
-                                r_n = str(row.get('대표자명','')).strip()
-                                r_i = str(row.get('대표학번','')).strip()
-                                if r_n and r_i: record_group_set.add(f"{r_n} {r_i}")
-                                
-                                # 동반자
-                                others = str(row.get('동반인원',''))
-                                if others and others != "없음":
-                                    for p in others.split(','):
-                                        if '(' in p and ')' in p:
-                                            p_n = p.split('(')[0].strip()
-                                            p_id = p.split('(')[1].replace(')', '').strip()
-                                            record_group_set.add(f"{p_n} {p_id}")
-                                
-                                # ★ 핵심: 구성원 집합이 100% 일치하면 시간 합산
-                                if current_group_set == record_group_set:
+                        for applicant in valid_users:
+                            app_name = applicant['name'].strip()
+                            app_id = applicant['id'].strip()
+                            my_usage_min = 0 
+                            
+                            for row in records_normal:
+                                if str(row.get('날짜','')).replace('.','-').strip() == date_str:
                                     es = to_min(row.get('시작시간'))
                                     ee = to_min(row.get('종료시간'))
-                                    u = (24*60 - es) + ee if ee < es else ee - es
-                                    total_usage_min += u
+                                    
+                                    # DB에 저장된 시간의 사용량 계산 (철야 고려)
+                                    if ee < es: usage = (24*60 - es) + ee
+                                    else: usage = ee - es
+                                    
+                                    # 포함 여부 확인
+                                    is_included = False
+                                    r_n = str(row.get('대표자명','')).strip()
+                                    r_i = str(row.get('대표학번','')).strip()
+                                    
+                                    if r_n == app_name and r_i == app_id: # 대표자일 때
+                                        is_included = True
+                                    else: # 동반자일 때
+                                        others = str(row.get('동반인원',''))
+                                        target_str = f"{app_name}({app_id})"
+                                        if others and others != "없음" and target_str in others:
+                                            is_included = True
+                                    
+                                    if is_included:
+                                        my_usage_min += usage
+                            
+                            if my_usage_min + dur > 180:
+                                block_msg = f"❌ '{app_name}'님은 금일 이용 한도(3시간)를 초과하게 됩니다.\n(이미 {my_usage_min}분 사용 + 신청 {dur}분)"
+                                break
                     
-                    if total_usage_min + dur > 180:
-                        st.error(f"❌ 동일한 인원 구성으로는 1일 최대 3시간까지만 예약 가능합니다.\n(기존: {total_usage_min}분 + 신청: {dur}분)")
+                    if block_msg:
+                        st.error(block_msg)
                         st.stop()
 
-                    # [3] 시간 중복 검사 (기존 로직 유지)
+                    # [2] 중복 시간 검사 (철야 포함)
                     overlap=False
                     req_start_dt = datetime.combine(date, start_time)
                     req_end_dt = datetime.combine(date + timedelta(days=1 if e_min < s_min else 0), end_time)
@@ -258,8 +267,11 @@ with tab1:
                                 r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').strip(), "%Y-%m-%d").date()
                                 es = to_min(row.get('시작시간'))
                                 ee = to_min(row.get('종료시간'))
+                                
+                                # 기존 예약 타임스탬프 (철야 고려)
                                 exist_start_dt = datetime.combine(r_d, dt_time(hour=es//60, minute=es%60))
                                 exist_end_dt = datetime.combine(r_d + timedelta(days=1 if ee < es else 0), dt_time(hour=ee//60, minute=ee%60))
+                                
                                 if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
                                     overlap=True; break
                             except: continue
@@ -281,8 +293,6 @@ with tab1:
                     if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
                     else:
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
-                        rep_name = valid_users[0]['name'].strip()
-                        rep_id = valid_users[0]['id'].strip()
                         others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]])
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
                         sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
