@@ -39,16 +39,19 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 구글 시트 연결 ---
+# --- 3. 구글 시트 연결 (TOML 방식 - 가장 안정적) ---
 @st.cache_resource
 def get_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
+        # [배포 환경] Secrets의 [gcp_service_account] 섹션을 딕셔너리로 바로 가져옴
         if "gcp_service_account" in st.secrets:
             key_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
+        # [로컬 환경] 내 컴퓨터 파일 사용
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name(JSON_FILE, scope)
+            
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -99,16 +102,11 @@ def show_status(records_normal, records_reg):
                     start = str(row.get('시작시간', ''))
                     end = str(row.get('종료시간', ''))
                     disp = mask_name(name) if name else "예약자"
-                    
-                    s_min = to_min(start)
-                    e_min = to_min(end)
-                    overnight = " (+1)" if e_min < s_min else ""
-                    
                     if start and end:
-                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start} - {end}{overnight}"
-                        future.append({"key": (r_d, s_min), "s": item})
+                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start} - {end}"
+                        future.append({"d": r_d, "s": item})
             except: continue
-        future.sort(key=lambda x: x['key'])
+        future.sort(key=lambda x: x['d'])
         if not future: status_html += "<div class='status-item' style='color:#999;'>예정된 예약이 없습니다.</div>"
         else:
             for item in future[:10]: status_html += f"<div class='status-item'>{item['s']}</div>"
@@ -126,15 +124,18 @@ def show_status(records_normal, records_reg):
     status_html += "</div>"
     st.markdown(status_html, unsafe_allow_html=True)
 
-# --- 7. 메인 UI ---
+# --- 7. 메인 UI 및 로직 ---
 st.title("공공인재학부 세미나실 대관시스템")
 with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
     st.markdown("""<div class="notice-box"><b>📁 대관 안내</b><br>- 일반대관: 최대 3주 뒤까지 신청 가능 (1일 3시간)<br>- 정기대관: 매월 1일 신청 (스터디 목적)<br><br><b>📁 이용 수칙</b><br>- 1인 대관 불가 / 선착순 마감 / 타 학과생 불가</div>""", unsafe_allow_html=True)
 
+# 데이터 로드 및 현황판 표시
 records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
 
+# ★ [핵심] 예약 성공 메시지 표시 영역
 success_placeholder = st.empty()
+
 if 'success_msg' in st.session_state and st.session_state['success_msg']:
     with success_placeholder.container():
         st.markdown("""
@@ -145,6 +146,7 @@ if 'success_msg' in st.session_state and st.session_state['success_msg']:
         </div>
         """, unsafe_allow_html=True)
         st.balloons()
+    
     time.sleep(10)
     success_placeholder.empty()
     st.session_state['success_msg'] = False
@@ -154,7 +156,6 @@ tab1, tab2 = st.tabs(["📅 일반 예약", "📝 정기 대관 신청"])
 
 # TAB 1: 일반 예약
 with tab1:
-    # 기본 2명으로 초기화 (최소 2인이므로)
     if 'attendees' not in st.session_state: st.session_state.attendees = [{"name": "", "id": ""}, {"name": "", "id": ""}]
     def add_attendee(): st.session_state.attendees.append({"name": "", "id": ""})
     def remove_last(): 
@@ -186,59 +187,24 @@ with tab1:
     if st.button("📅 예약 신청하기", type="primary"):
         s_min = to_min(f"{start_time.hour}:{start_time.minute}")
         e_min = to_min(f"{end_time.hour}:{end_time.minute}")
+        dur = e_min - s_min
+        valid = [p for p in st.session_state.attendees if p['name'] and p['id']]
         
-        if e_min < s_min: dur = (24 * 60 - s_min) + e_min
-        else: dur = e_min - s_min
-            
-        valid_users = [p for p in st.session_state.attendees if p['name'] and p['id']]
-        
-        # 1. 기본 유효성 검사 (★ 수정된 부분: 최소 2인 검사)
-        if len(valid_users) < 2: 
-            st.error("❌ 최소 2인 이상 입력해야 합니다. (1인 대관 불가)")
-        elif dur > 180: st.error("❌ 하루 최대 3시간까지만 가능합니다.")
+        if len(valid)<1: st.error("❌ 최소 1명 입력 필수")
+        elif dur > 180: st.error("❌ 최대 3시간")
         elif dur < 10: st.error("❌ 최소 10분")
+        elif s_min >= e_min: st.error("❌ 종료시간 오류")
         else:
             cli = get_client()
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
-                    # 대표자 정보 추출
-                    rep_name = valid_users[0]['name'].strip()
-                    rep_id = valid_users[0]['id'].strip()
-                    
-                    # --- 대표자 1일 총량제 (3시간) ---
-                    total_usage_min = 0
+                    overlap=False
                     if records_normal:
                         for row in records_normal:
                             if str(row.get('날짜','')).replace('.','-').strip() == date_str:
-                                r_n = str(row.get('대표자명','')).strip()
-                                r_i = str(row.get('대표학번','')).strip()
-                                if r_n == rep_name and r_i == rep_id:
-                                    es = to_min(row.get('시작시간'))
-                                    ee = to_min(row.get('종료시간'))
-                                    usage = (24*60 - es) + ee if ee < es else ee - es
-                                    total_usage_min += usage
-                    
-                    if total_usage_min + dur > 180:
-                        st.error(f"❌ 1일 최대 3시간 초과!\n(기존: {total_usage_min}분 + 신청: {dur}분 = 총 {total_usage_min + dur}분)")
-                        st.stop()
-
-                    overlap=False
-                    req_start_dt = datetime.combine(date, start_time)
-                    req_end_dt = datetime.combine(date + timedelta(days=1 if e_min < s_min else 0), end_time)
-
-                    if records_normal:
-                        for row in records_normal:
-                            try:
-                                r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').strip(), "%Y-%m-%d").date()
-                                es = to_min(row.get('시작시간'))
-                                ee = to_min(row.get('종료시간'))
-                                exist_start_dt = datetime.combine(r_d, dt_time(hour=es//60, minute=es%60))
-                                exist_end_dt = datetime.combine(r_d + timedelta(days=1 if ee < es else 0), dt_time(hour=ee//60, minute=ee%60))
-                                if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
-                                    overlap=True; break
-                            except: continue
-
+                                es, ee = to_min(row.get('시작시간')), to_min(row.get('종료시간'))
+                                if (s_min < ee) and (e_min > es): overlap=True; break
                     if not overlap and records_reg:
                         kd = get_day_korean(date)
                         for rr in records_reg[1:]:
@@ -246,19 +212,16 @@ with tab1:
                                 ps, pe = rr[4].split("~")
                                 if ps.strip() <= date_str <= pe.strip():
                                     ts, te = rr[6].split("~")
-                                    reg_s = to_min(ts.strip())
-                                    reg_e = to_min(te.strip())
-                                    reg_start_dt = datetime.combine(date, dt_time(hour=reg_s//60, minute=reg_s%60))
-                                    reg_end_dt = datetime.combine(date + timedelta(days=1 if reg_e < reg_s else 0), dt_time(hour=reg_e//60, minute=reg_e%60))
-                                    if (req_start_dt < reg_end_dt) and (req_end_dt > reg_start_dt):
-                                        overlap=True; break
+                                    if (s_min < to_min(te.strip())) and (e_min > to_min(ts.strip())): overlap=True; break
                     
                     if overlap: st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
                     else:
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
-                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]])
+                        rep_n, rep_i = valid[0]['name'], valid[0]['id']
+                        others = ", ".join([f"{p['name']}({p['id']})" for p in valid[1:]]) if len(valid)>1 else "없음"
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
-                        sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
+                        sht.append_row([date_str, s_str, e_str, rep_n, rep_i, others])
+                        
                         st.cache_data.clear()
                         st.session_state['success_msg'] = True
                         st.rerun()
