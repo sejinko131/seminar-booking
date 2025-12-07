@@ -1,5 +1,6 @@
 import streamlit as st
 import gspread
+import pandas as pd
 import time
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, time as dt_time
@@ -17,9 +18,9 @@ st.markdown("""
     h1 { text-align: center; font-size: 1.8rem !important; margin-bottom: 10px; }
     .stButton button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
     
-    .status-box { background-color: #ffffff; border-radius: 10px; padding: 15px; margin-bottom: 20px; border: 1px solid #ddd; font-size: 14px; color: #000000 !important; }
-    .status-header { font-weight: bold; color: #ff4b4b !important; margin-bottom: 10px; font-size: 16px; border-bottom: 2px solid #eee; padding-bottom: 5px; }
-    .status-item { margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #f0f0f0; }
+    /* 달력 데이터프레임 스타일 */
+    .dataframe { font-size: 12px !important; text-align: center !important; }
+    
     .notice-box { background-color: #fff3cd; color: #856404 !important; padding: 15px; border-radius: 5px; font-size: 13px; margin-bottom: 15px; line-height: 1.6; }
     
     .success-message {
@@ -68,87 +69,118 @@ def load_data():
         return data1, data2
     except: return None, None
 
-# --- 5. 헬퍼 함수 (시간 변환 강화) ---
+# --- 5. 헬퍼 함수 ---
 def to_min(v):
-    """
-    시간 문자열을 분(minute)으로 변환 (HH:MM:SS도 처리 가능하도록 개선)
-    """
     try:
         if isinstance(v, int): return v * 60
         if isinstance(v, str):
             v = v.strip()
-            # 14:30:00 같은 경우 앞의 14:30만 잘라서 씀
-            if ':' in v:
-                parts = v.split(':')
-                h = int(parts[0])
-                m = int(parts[1])
-                return h * 60 + m
+            if ':' in v: h, m = map(int, v.split(':')[0:2]); return h * 60 + m
             if v.isdigit(): return int(v) * 60
     except: pass
     return 0
 
 def get_day_korean(date_obj): return ["월", "화", "수", "목", "금", "토", "일"][date_obj.weekday()]
-def mask_name(name): return (str(name).strip()[0] + "**") if len(str(name).strip()) > 1 else str(name)
 
-# --- 6. 현황판 ---
-def show_status(records_normal, records_reg):
-    st.markdown("#### 📅 세미나실 대관현황")
-    status_html = "<div class='status-box'>"
-    status_html += "<div class='status-header'>▪️ 일반대관 (24시간 기준)</div>"
+# --- 6. 달력 데이터 생성 함수 ---
+def get_weekly_schedule(records_normal, records_reg, week_offset=0):
+    today = datetime.now().date()
+    target_date = today + timedelta(weeks=week_offset)
     
-    if records_normal is not None:
-        today = datetime.now().date()
-        future = []
+    # 해당 주 월요일
+    start_of_week = target_date - timedelta(days=target_date.weekday())
+    week_dates = [start_of_week + timedelta(days=i) for i in range(7)]
+    
+    # 컬럼명
+    week_cols = [f"{d.strftime('%m/%d')}({get_day_korean(d)})" for d in week_dates]
+    
+    # 시간대 (09:00 ~ 23:00)
+    hours = range(9, 24)
+    df = pd.DataFrame(index=[f"{h:02d}:00" for h in hours], columns=week_cols)
+    df[:] = "" 
+
+    # [1] 일반 예약
+    if records_normal:
         for row in records_normal:
             try:
-                r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').replace('/','-').strip(), "%Y-%m-%d").date()
-                if r_d >= today:
-                    name = str(row.get('대표자명', ''))
-                    start = str(row.get('시작시간', ''))
-                    end = str(row.get('종료시간', ''))
-                    disp = mask_name(name) if name else "예약자"
+                r_d = datetime.strptime(str(row.get('날짜','')).replace('.','-').strip(), "%Y-%m-%d").date()
+                if r_d in week_dates:
+                    col_idx = week_dates.index(r_d)
+                    col_name = week_cols[col_idx]
                     
-                    s_min = to_min(start)
-                    e_min = to_min(end)
+                    s_min = to_min(row.get('시작시간'))
+                    e_min = to_min(row.get('종료시간'))
                     
-                    # 철야 표시 로직
-                    if e_min < s_min:
-                        end_dt = datetime.combine(r_d + timedelta(days=1), dt_time(hour=e_min//60, minute=e_min%60))
-                        overnight = " (+1)"
-                    else:
-                        end_dt = datetime.combine(r_d, dt_time(hour=e_min//60, minute=e_min%60))
-                        overnight = ""
-                    
-                    if end_dt > datetime.now():
-                        item = f"<b>{disp}</b> / {r_d.strftime('%m/%d')}({get_day_korean(r_d)}) / {start} - {end}{overnight}"
-                        future.append({"key": (r_d, s_min), "s": item})
+                    # 철야 처리
+                    if e_min < s_min: e_min += 24 * 60
+
+                    for h in hours:
+                        h_start = h * 60
+                        h_end = (h + 1) * 60
+                        if (s_min < h_end) and (e_min > h_start):
+                            df.at[f"{h:02d}:00", col_name] = "🟦"
             except: continue
-        future.sort(key=lambda x: x['key'])
-        if not future: status_html += "<div class='status-item' style='color:#999;'>예정된 예약이 없습니다.</div>"
-        else:
-            for item in future[:10]: status_html += f"<div class='status-item'>{item['s']}</div>"
-    else: status_html += "<div class='status-item' style='color:red;'>서버 연결 실패</div>"
-    
-    status_html += "<br><div class='status-header'>▪️ 정기대관 (학기 중)</div>"
-    has_reg = False
+
+    # [2] 정기 대관
     if records_reg and len(records_reg) > 1:
         for row in records_reg[1:]:
-            if len(row) > 6:
-                status_html += f"<div class='status-item'><b>{row[1]}</b> / 매주 {row[5]} / {row[6]}</div>"
-                has_reg = True
-    if not has_reg: status_html += "<div class='status-item' style='color:#999;'>승인된 정기 대관이 없습니다.</div>"
-    
-    status_html += "</div>"
-    st.markdown(status_html, unsafe_allow_html=True)
+            try:
+                if len(row) < 7: continue
+                p_str, d_str, t_str = row[4], row[5], row[6]
+                if "~" in p_str and "~" in t_str:
+                    ps, pe = p_str.split("~")
+                    p_start = datetime.strptime(ps.strip(), "%Y-%m-%d").date()
+                    p_end = datetime.strptime(pe.strip(), "%Y-%m-%d").date()
+                    
+                    ts, te = t_str.split("~")
+                    rs, re_time = to_min(ts), to_min(te)
+                    if re_time < rs: re_time += 24*60
 
-# --- 7. 메인 UI 및 로직 ---
+                    for i, w_date in enumerate(week_dates):
+                        if p_start <= w_date <= p_end:
+                            if get_day_korean(w_date) in d_str:
+                                col_name = week_cols[i]
+                                for h in hours:
+                                    h_start = h * 60
+                                    h_end = (h + 1) * 60
+                                    if (rs < h_end) and (re_time > h_start):
+                                        if df.at[f"{h:02d}:00", col_name] == "":
+                                            df.at[f"{h:02d}:00", col_name] = "🟧"
+            except: continue
+            
+    return df, f"{start_of_week.strftime('%Y.%m.%d')} ~ {(start_of_week+timedelta(days=6)).strftime('%Y.%m.%d')}"
+
+# --- 7. 메인 UI ---
 st.title("공공인재학부 세미나실 대관시스템")
 with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
     st.markdown("""<div class="notice-box"><b>📁 대관 안내</b><br>- 일반대관: 최대 3주 뒤까지 신청 가능 (1일 3시간)<br>- 정기대관: 매월 1일 신청 (스터디 목적)<br><br><b>📁 이용 수칙</b><br>- 1인 대관 불가 / 선착순 마감 / 타 학과생 불가</div>""", unsafe_allow_html=True)
 
+# 데이터 로드
 records_normal, records_reg = load_data()
-show_status(records_normal, records_reg)
 
+# [대관 현황 - 달력]
+st.markdown("#### 📅 세미나실 대관현황 (주간)")
+if 'week_offset' not in st.session_state: st.session_state.week_offset = 0
+
+wc1, wc2, wc3 = st.columns([1, 2, 1])
+with wc1:
+    if st.button("◀ 지난주"): st.session_state.week_offset -= 1; st.rerun()
+with wc3:
+    if st.button("다음주 ▶"):
+        if st.session_state.week_offset < 3: st.session_state.week_offset += 1; st.rerun()
+        else: st.toast("최대 3주 후까지만 조회 가능합니다.")
+
+schedule_df, week_range_str = get_weekly_schedule(records_normal, records_reg, st.session_state.week_offset)
+with wc2: st.markdown(f"<div style='text-align:center; font-weight:bold; padding-top:10px;'>{week_range_str}</div>", unsafe_allow_html=True)
+
+st.caption("🟦: 일반 예약 / 🟧: 정기 대관")
+def highlight_cells(val):
+    if val == "🟦": return 'background-color: #a3d4ff; color: #a3d4ff' 
+    elif val == "🟧": return 'background-color: #ffcc99; color: #ffcc99' 
+    return ''
+st.dataframe(schedule_df.style.map(highlight_cells), use_container_width=True, height=400)
+
+# 성공 메시지
 success_placeholder = st.empty()
 if 'success_msg' in st.session_state and st.session_state['success_msg']:
     with success_placeholder.container():
@@ -215,6 +247,10 @@ with tab1:
             if not cli: st.error("❌ 서버 연결 실패")
             else:
                 try:
+                    # [★수정됨] rep_name, rep_id 정의 (try 블록 맨 위로 위치 변경)
+                    rep_name = valid_users[0]['name'].strip()
+                    rep_id = valid_users[0]['id'].strip()
+
                     # [1] 개인별 누적 사용량 전수 조사 (철야 포함)
                     block_msg = ""
                     if records_normal:
@@ -295,6 +331,7 @@ with tab1:
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
                         others = ", ".join([f"{p['name']}({p['id']})" for p in valid_users[1:]])
                         s_str, e_str = start_time.strftime("%H:%M"), end_time.strftime("%H:%M")
+                        # 이제 rep_name, rep_id가 정의되어 있으므로 에러 없음
                         sht.append_row([date_str, s_str, e_str, rep_name, rep_id, others])
                         st.cache_data.clear()
                         st.session_state['success_msg'] = True
