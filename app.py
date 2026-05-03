@@ -326,7 +326,7 @@ def show_status(records_normal, records_reg):
     else:
         status_html += "<div class='status-item' style='color:red;'>서버 연결 실패</div>"
 
-    status_html += "<br><div class='status-header'>▪️ 사용 가능한 정기대관</div>"
+    status_html += "<br><div class='status-header'>▪️ 정기대관</div>"
 
     has_reg = False
 
@@ -343,7 +343,6 @@ def show_status(records_normal, records_reg):
                 period_text = str(row[4]).strip()
                 days_text = str(row[5]).strip()
                 time_text = str(row[6]).strip()
-                purpose = str(row[7]).strip()
 
                 period_start, period_end = parse_period_local(period_text)
                 days = normalize_days_text(days_text)
@@ -365,10 +364,8 @@ def show_status(records_normal, records_reg):
                 status_html += (
                     f"<div class='status-item'>"
                     f"<b>{group_name}</b> / "
-                    f"{period_start.strftime('%m/%d')}~{period_end.strftime('%m/%d')} / "
                     f"매주 {days_text} / "
-                    f"{time_text} / "
-                    f"{purpose}"
+                    f"{time_text}"
                     f"</div>"
                 )
                 has_reg = True
@@ -377,7 +374,7 @@ def show_status(records_normal, records_reg):
                 continue
 
     if not has_reg:
-        status_html += "<div class='status-item' style='color:#999;'>사용 가능한 정기대관이 없습니다.</div>"
+        status_html += "<div class='status-item' style='color:#999;'>등록된 정기대관이 없습니다.</div>"
 
     status_html += "</div>"
 
@@ -693,65 +690,6 @@ with tab2:
         f"신청 가능 기간: {month_start.strftime('%Y-%m-%d')} ~ {month_end.strftime('%Y-%m-%d')}"
     )
 
-    st.markdown("#### 📌 사용 가능한 정기대관")
-
-    existing_reg_html = "<div class='status-box'>"
-    has_existing_reg = False
-
-    if records_reg and len(records_reg) > 1:
-        for row in records_reg[1:]:
-            try:
-                # 신청일 / 단체명 / 대표자 / 연락처 / 사용기간 / 요일 / 사용시간 / 사용목적
-                if len(row) < 8:
-                    continue
-
-                group_name = str(row[1]).strip()
-                period_text = str(row[4]).strip()
-                days_text = str(row[5]).strip()
-                time_text = str(row[6]).strip()
-                purpose = str(row[7]).strip()
-
-                period_start, period_end = parse_period_local(period_text)
-                days = normalize_days_text(days_text)
-
-                if not period_start or not period_end:
-                    continue
-
-                if not days:
-                    continue
-
-                # 이번 달과 사용기간이 전혀 겹치지 않으면 숨김
-                if period_end < month_start or period_start > month_end:
-                    continue
-
-                # 사용기간이 이미 끝났으면 숨김
-                if period_end < today:
-                    continue
-
-                # 오늘 이후 실제 사용 가능한 요일/시간이 남아있는 경우만 표시
-                if not has_remaining_regular_occurrence(period_start, period_end, days, time_text):
-                    continue
-
-                existing_reg_html += (
-                    f"<div class='status-item'>"
-                    f"<b>{group_name}</b> / "
-                    f"{period_start.strftime('%m/%d')}~{period_end.strftime('%m/%d')} / "
-                    f"매주 {days_text} / "
-                    f"{time_text} / "
-                    f"{purpose}"
-                    f"</div>"
-                )
-                has_existing_reg = True
-
-            except:
-                continue
-
-    if not has_existing_reg:
-        existing_reg_html += "<div class='status-item' style='color:#999;'>현재 사용 가능한 정기대관이 없습니다.</div>"
-
-    existing_reg_html += "</div>"
-    st.markdown(existing_reg_html, unsafe_allow_html=True)
-
     with st.form("regular_form"):
         group_name = st.text_input("단체명", placeholder="예: 공공인재학부 스터디")
         rep_name = st.text_input("대표자", placeholder="대표자 이름")
@@ -820,7 +758,6 @@ with tab2:
         else:
             selected_dates = get_dates_by_days(month_start, month_end, reg_days)
 
-            # 이미 지난 날짜는 중복검사 대상에서 제외
             selected_dates_for_check = [
                 d for d in selected_dates
                 if d >= today
