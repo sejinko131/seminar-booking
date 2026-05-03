@@ -304,14 +304,337 @@ with tab1:
                 except Exception as e: st.error(f"오류: {e}")
 
 # TAB 2: 정기 대관
-# TAB 2: 정기 대관
 with tab2:
+    today = datetime.today().date()
+    month_start = today.replace(day=1)
+
+    if today.month == 12:
+        next_month_start = today.replace(year=today.year + 1, month=1, day=1)
+    else:
+        next_month_start = today.replace(month=today.month + 1, day=1)
+
+    month_end = next_month_start - timedelta(days=1)
+
+    def parse_date_local(v):
+        try:
+            return datetime.strptime(
+                str(v).replace(".", "-").replace("/", "-").strip(),
+                "%Y-%m-%d"
+            ).date()
+        except:
+            return None
+
+    def time_overlap(s1, e1, s2, e2):
+        return s1 < e2 and e1 > s2
+
+    def make_dt_range(base_date, start_min, end_min):
+        start_dt = datetime.combine(
+            base_date,
+            dt_time(hour=start_min // 60, minute=start_min % 60)
+        )
+
+        end_date = base_date + timedelta(days=1 if end_min < start_min else 0)
+
+        end_dt = datetime.combine(
+            end_date,
+            dt_time(hour=end_min // 60, minute=end_min % 60)
+        )
+
+        return start_dt, end_dt
+
+    def get_dates_by_days(start_date, end_date, selected_days):
+        result = []
+        cur = start_date
+
+        while cur <= end_date:
+            if get_day_korean(cur) in selected_days:
+                result.append(cur)
+            cur += timedelta(days=1)
+
+        return result
+
+    def parse_period(period_text):
+        try:
+            if "~" not in str(period_text):
+                return None, None
+
+            ps, pe = str(period_text).split("~")
+            ps = parse_date_local(ps.strip())
+            pe = parse_date_local(pe.strip())
+
+            return ps, pe
+        except:
+            return None, None
+
+    def parse_time_range(time_text):
+        try:
+            if "~" not in str(time_text):
+                return None, None
+
+            ts, te = str(time_text).split("~")
+            return to_min(ts.strip()), to_min(te.strip())
+        except:
+            return None, None
+
     st.markdown("""
     <div class="notice-box">
         <b>📢 정기대관 신청 안내</b><br><br>
-        정기대관은 카카오톡 채널 <b>'중앙대학교 공공인재학부 학생회'</b>로
-        이름, 학번, 요일, 신청목적을 적어주시면 검토 후 대관 등록 예정입니다.<br><br>
+        정기대관은 이번 달 안에서 신청 가능하며, 요일은 매주 반복되는 형태로 등록됩니다.<br>
+        이름, 학번, 요일, 시작시간, 종료시간, 신청목적을 입력해주시면 검토 후 대관 등록 예정입니다.<br><br>
         매달 말 초기화될 예정이오니, 계속 이용을 원하시는 경우,
         매월 초 다시 신청해주시면 감사하겠습니다.
     </div>
     """, unsafe_allow_html=True)
+
+    st.caption(f"신청 가능 기간: {month_start.strftime('%Y-%m-%d')} ~ {month_end.strftime('%Y-%m-%d')}")
+
+    # 현재 시트에 등록된 정기대관 표시
+    st.markdown("#### 📌 현재 등록된 정기대관")
+
+    existing_reg_html = "<div class='status-box'>"
+    has_existing_reg = False
+
+    if records_reg and len(records_reg) > 1:
+        for row in records_reg[1:]:
+            try:
+                if len(row) > 6 and "~" in row[4]:
+                    ps, pe = parse_period(row[4])
+
+                    if not ps or not pe:
+                        continue
+
+                    # 이번 달 기간과 겹치는 정기대관만 표시
+                    if ps <= month_end and pe >= month_start:
+                        name = str(row[1]).strip()
+                        days_text = str(row[5]).strip()
+                        time_text = str(row[6]).strip()
+                        purpose = str(row[7]).strip() if len(row) > 7 else ""
+
+                        existing_reg_html += (
+                            f"<div class='status-item'>"
+                            f"<b>{name}</b> / 매주 {days_text} / {time_text}"
+                            f"{' / ' + purpose if purpose else ''}"
+                            f"</div>"
+                        )
+                        has_existing_reg = True
+            except:
+                continue
+
+    if not has_existing_reg:
+        existing_reg_html += "<div class='status-item' style='color:#999;'>현재 등록된 정기대관이 없습니다.</div>"
+
+    existing_reg_html += "</div>"
+    st.markdown(existing_reg_html, unsafe_allow_html=True)
+
+    with st.form("regular_form"):
+        reg_name = st.text_input("이름 또는 단체명", placeholder="예: 홍길동 / 공공인재학부 스터디")
+        reg_student_id = st.text_input("학번", placeholder="예: 20240000")
+
+        reg_days = st.multiselect(
+            "요일 선택",
+            ["월", "화", "수", "목", "금", "토", "일"],
+            placeholder="매주 반복될 요일을 선택하세요"
+        )
+
+        rt1, rt2 = st.columns(2)
+
+        with rt1:
+            reg_start_time = st.time_input(
+                "시작시간",
+                value=dt_time(18, 0),
+                step=600
+            )
+
+        with rt2:
+            reg_end_time = st.time_input(
+                "종료시간",
+                value=dt_time(21, 0),
+                step=600
+            )
+
+        reg_purpose = st.text_area(
+            "신청목적",
+            height=80,
+            placeholder="예: 스터디, 회의 등"
+        )
+
+        submitted = st.form_submit_button("정기대관 신청하기", type="primary")
+
+    if submitted:
+        reg_s_min = reg_start_time.hour * 60 + reg_start_time.minute
+        reg_e_min = reg_end_time.hour * 60 + reg_end_time.minute
+
+        if reg_e_min < reg_s_min:
+            reg_duration = (24 * 60 - reg_s_min) + reg_e_min
+        else:
+            reg_duration = reg_e_min - reg_s_min
+
+        if not reg_name.strip():
+            st.error("❌ 이름 또는 단체명을 입력해주세요.")
+
+        elif not reg_student_id.strip():
+            st.error("❌ 학번을 입력해주세요.")
+
+        elif not reg_days:
+            st.error("❌ 요일을 1개 이상 선택해주세요.")
+
+        elif not reg_purpose.strip():
+            st.error("❌ 신청목적을 입력해주세요.")
+
+        elif reg_duration > 180:
+            st.error("❌ 1회 이용 시간은 최대 3시간을 넘길 수 없습니다.")
+
+        elif reg_duration < 10:
+            st.error("❌ 최소 10분 이상 신청해주세요.")
+
+        else:
+            selected_dates = get_dates_by_days(month_start, month_end, reg_days)
+
+            if not selected_dates:
+                st.error("❌ 선택한 요일에 해당하는 날짜가 이번 달에 없습니다.")
+                st.stop()
+
+            overlap = False
+            overlap_msg = ""
+
+            # 1. 일반대관과 정기대관 신청이 겹치는지 확인
+            if records_normal:
+                for target_date in selected_dates:
+                    req_start_dt, req_end_dt = make_dt_range(
+                        target_date,
+                        reg_s_min,
+                        reg_e_min
+                    )
+
+                    for row in records_normal:
+                        try:
+                            normal_date = parse_date_local(row.get("날짜", ""))
+
+                            if not normal_date:
+                                continue
+
+                            ns = to_min(row.get("시작시간"))
+                            ne = to_min(row.get("종료시간"))
+
+                            normal_start_dt, normal_end_dt = make_dt_range(
+                                normal_date,
+                                ns,
+                                ne
+                            )
+
+                            if time_overlap(req_start_dt, req_end_dt, normal_start_dt, normal_end_dt):
+                                overlap = True
+                                overlap_msg = (
+                                    f"❌ 신청 불가: {target_date.strftime('%m/%d')}({get_day_korean(target_date)}) "
+                                    f"{reg_start_time.strftime('%H:%M')}~{reg_end_time.strftime('%H:%M')} 시간이 "
+                                    f"이미 일반대관과 겹칩니다."
+                                )
+                                break
+
+                        except:
+                            continue
+
+                    if overlap:
+                        break
+
+            # 2. 기존 정기대관과 새 정기대관 신청이 겹치는지 확인
+            if not overlap and records_reg and len(records_reg) > 1:
+                for row in records_reg[1:]:
+                    try:
+                        if len(row) <= 6:
+                            continue
+
+                        old_period = str(row[4]).strip()
+                        old_days_text = str(row[5]).strip()
+                        old_time_text = str(row[6]).strip()
+
+                        old_start_date, old_end_date = parse_period(old_period)
+                        old_s_min, old_e_min = parse_time_range(old_time_text)
+
+                        if not old_start_date or not old_end_date:
+                            continue
+
+                        if old_s_min is None or old_e_min is None:
+                            continue
+
+                        old_days = [
+                            d.strip()
+                            for d in old_days_text.replace("/", ",").split(",")
+                            if d.strip()
+                        ]
+
+                        period_start = max(month_start, old_start_date)
+                        period_end = min(month_end, old_end_date)
+
+                        if period_start > period_end:
+                            continue
+
+                        old_dates = get_dates_by_days(period_start, period_end, old_days)
+
+                        for target_date in selected_dates:
+                            req_start_dt, req_end_dt = make_dt_range(
+                                target_date,
+                                reg_s_min,
+                                reg_e_min
+                            )
+
+                            for old_date in old_dates:
+                                old_start_dt, old_end_dt = make_dt_range(
+                                    old_date,
+                                    old_s_min,
+                                    old_e_min
+                                )
+
+                                if time_overlap(req_start_dt, req_end_dt, old_start_dt, old_end_dt):
+                                    overlap = True
+                                    overlap_msg = (
+                                        f"❌ 신청 불가: {target_date.strftime('%m/%d')}({get_day_korean(target_date)}) "
+                                        f"{reg_start_time.strftime('%H:%M')}~{reg_end_time.strftime('%H:%M')} 시간이 "
+                                        f"이미 정기대관과 겹칩니다."
+                                    )
+                                    break
+
+                            if overlap:
+                                break
+
+                        if overlap:
+                            break
+
+                    except:
+                        continue
+
+            if overlap:
+                st.error(overlap_msg)
+
+            else:
+                try:
+                    cli = get_client()
+
+                    if not cli:
+                        st.error("❌ 서버 연결 실패")
+
+                    else:
+                        ws = cli.open(SHEET_NAME).worksheet("정기대관_신청")
+
+                        now = datetime.now().strftime("%Y-%m-%d")
+                        period_str = f"{month_start.strftime('%Y-%m-%d')} ~ {month_end.strftime('%Y-%m-%d')}"
+                        days_str = ", ".join(reg_days)
+                        time_str = f"{reg_start_time.strftime('%H:%M')} ~ {reg_end_time.strftime('%H:%M')}"
+
+                        ws.append_row([
+                            now,
+                            reg_name.strip(),
+                            reg_name.strip(),
+                            reg_student_id.strip(),
+                            period_str,
+                            days_str,
+                            time_str,
+                            reg_purpose.strip()
+                        ])
+
+                        st.cache_data.clear()
+                        st.success("✅ 정기대관 신청이 완료되었습니다. 검토 후 대관 등록 예정입니다.")
+                        st.rerun()
+
+                except Exception as e:
+                    st.error(f"오류: {e}")
