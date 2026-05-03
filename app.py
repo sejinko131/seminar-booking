@@ -304,32 +304,14 @@ with tab1:
                 except Exception as e: st.error(f"오류: {e}")
 
 # TAB 2: 정기 대관
+# TAB 2: 정기 대관
 with tab2:
-    st.info("📢 관리자 승인 후 확정됩니다.")
-    with st.form("reg_form"):
-        tn = st.text_input("단체명")
-        ln = st.text_input("대표자")
-        ct = st.text_input("연락처")
-        c1, c2 = st.columns(2)
-        with c1: sd = st.date_input("시작일")
-        with c2: ed = st.date_input("종료일")
-        days = st.multiselect("요일", ["월","화","수","목","금","토","일"])
-        tc1, tc2 = st.columns(2)
-        with tc1: rs = st.time_input("시작시간", dt_time(18,0))
-        with tc2: re = st.time_input("종료시간", dt_time(21,0))
-        purp = st.text_area("사용목적", height=80)
-        if st.form_submit_button("신청서 제출"):
-            if not tn or not days: st.error("필수 정보 입력")
-            else:
-                try:
-                    cli = get_client()
-                    sr = cli.open(SHEET_NAME).worksheet("정기대관_신청")
-                    now = datetime.now().strftime("%Y-%m-%d")
-                    p_str = f"{sd} ~ {ed}"
-                    d_str = ", ".join(days)
-                    t_str = f"{rs.strftime('%H:%M')} ~ {re.strftime('%H:%M')}"
-                    sr.append_row([now, tn, ln, ct, p_str, d_str, t_str, purp])
-                    st.cache_data.clear()
-                    st.success("✅ 신청 완료!")
-                    st.rerun()
-                except: st.error("오류")
+    st.markdown("""
+    <div class="notice-box">
+        <b>📢 정기대관 신청 안내</b><br><br>
+        정기대관은 카카오톡 채널 <b>'중앙대학교 공공인재학부 학생회'</b>로
+        이름, 학번, 요일, 신청목적을 적어주시면 검토 후 대관 등록 예정입니다.<br><br>
+        매달 말 초기화될 예정이오니, 계속 이용을 원하시는 경우,
+        매월 초 다시 신청해주시면 감사하겠습니다.
+    </div>
+    """, unsafe_allow_html=True)
