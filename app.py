@@ -52,6 +52,29 @@ st.markdown("""
         line-height: 1.6;
     }
 
+    .regular-list-box {
+        background-color: #f8f9fa;
+        color: #212529 !important;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+        font-size: 14px;
+        margin-bottom: 18px;
+        line-height: 1.6;
+    }
+
+    .regular-list-title {
+        font-weight: bold;
+        font-size: 15px;
+        margin-bottom: 8px;
+        color: #0d6efd !important;
+    }
+
+    .regular-list-item {
+        padding: 7px 0;
+        border-bottom: 1px solid #e9ecef;
+    }
+
     .success-message {
         background-color: #d4edda;
         color: #155724;
@@ -152,6 +175,70 @@ def mask_name(name):
 
     return name
 
+
+def parse_date_safe(date_str):
+    try:
+        return datetime.strptime(
+            str(date_str).replace(".", "-").replace("/", "-").strip(),
+            "%Y-%m-%d"
+        ).date()
+    except:
+        return None
+
+
+def parse_regular_row(row):
+    """
+    정기대관_신청 시트 형식:
+    A 신청일시
+    B 날짜
+    C 시작시간
+    D 종료시간
+    E 대표자 이름
+    F 학번
+    G 이용 목적
+    """
+    try:
+        if len(row) < 7:
+            return None
+
+        reg_date = parse_date_safe(row[1])
+
+        if not reg_date:
+            return None
+
+        return {
+            "date": reg_date,
+            "start": str(row[2]).strip(),
+            "end": str(row[3]).strip(),
+            "name": str(row[4]).strip(),
+            "student_id": str(row[5]).strip(),
+            "purpose": str(row[6]).strip()
+        }
+
+    except:
+        return None
+
+
+def get_regular_records_in_period(records_reg, start_date, end_date):
+    result = []
+
+    if not records_reg or len(records_reg) <= 1:
+        return result
+
+    for row in records_reg[1:]:
+        item = parse_regular_row(row)
+
+        if not item:
+            continue
+
+        if start_date <= item["date"] <= end_date:
+            result.append(item)
+
+    result.sort(key=lambda x: (x["date"], to_min(x["start"])))
+
+    return result
+
+
 # --- 6. 정기대관 지난 월 내역 자동 삭제 ---
 def clear_old_regular_records():
     cli = get_client()
@@ -173,18 +260,15 @@ def clear_old_regular_records():
         rows_to_delete = []
 
         for idx, row in enumerate(values[1:], start=2):
-            try:
-                if len(row) < 2:
-                    continue
+            item = parse_regular_row(row)
 
-                reg_date_str = str(row[1]).replace(".", "-").replace("/", "-").strip()
-                reg_date = datetime.strptime(reg_date_str, "%Y-%m-%d").date()
-
-                if reg_date.year != current_year or reg_date.month != current_month:
-                    rows_to_delete.append(idx)
-
-            except:
+            if not item:
                 continue
+
+            reg_date = item["date"]
+
+            if reg_date.year != current_year or reg_date.month != current_month:
+                rows_to_delete.append(idx)
 
         for row_idx in reversed(rows_to_delete):
             ws.delete_rows(row_idx)
@@ -255,50 +339,60 @@ def show_status(records_normal, records_reg):
 
     status_html += "<br><div class='status-header'>▪️ 정기대관 신청 내역 (이번 달)</div>"
 
-    has_reg = False
+    today = datetime.today().date()
+    month_start = today.replace(day=1)
 
-    if records_reg and len(records_reg) > 1:
-        reg_items = []
+    if today.month == 12:
+        next_month_start = today.replace(year=today.year + 1, month=1, day=1)
+    else:
+        next_month_start = today.replace(month=today.month + 1, day=1)
 
-        for row in records_reg[1:]:
-            try:
-                if len(row) < 7:
-                    continue
+    month_end = next_month_start - timedelta(days=1)
 
-                reg_date_str = str(row[1]).replace(".", "-").replace("/", "-").strip()
-                reg_date = datetime.strptime(reg_date_str, "%Y-%m-%d").date()
+    regular_items = get_regular_records_in_period(records_reg, month_start, month_end)
 
-                today = datetime.today().date()
-
-                if reg_date < today:
-                    continue
-
-                start = str(row[2]).strip()
-                end = str(row[3]).strip()
-                name = str(row[4]).strip()
-                purpose = str(row[6]).strip()
-
-                s_min = to_min(start)
-                disp = mask_name(name) if name else "신청자"
-
-                item = f"<b>{disp}</b> / {reg_date.strftime('%m/%d')}({get_day_korean(reg_date)}) / {start} - {end} / {purpose}"
-                reg_items.append({"key": (reg_date, s_min), "s": item})
-
-            except:
-                continue
-
-        reg_items.sort(key=lambda x: x["key"])
-
-        for item in reg_items[:15]:
-            status_html += f"<div class='status-item'>{item['s']}</div>"
-            has_reg = True
-
-    if not has_reg:
+    if not regular_items:
         status_html += "<div class='status-item' style='color:#999;'>이번 달 정기대관 신청 내역이 없습니다.</div>"
+    else:
+        for item in regular_items[:15]:
+            disp = mask_name(item["name"]) if item["name"] else "신청자"
+            status_html += (
+                f"<div class='status-item'>"
+                f"<b>{disp}</b> / "
+                f"{item['date'].strftime('%m/%d')}({get_day_korean(item['date'])}) / "
+                f"{item['start']} - {item['end']} / "
+                f"{item['purpose']}"
+                f"</div>"
+            )
 
     status_html += "</div>"
 
     st.markdown(status_html, unsafe_allow_html=True)
+
+
+def show_regular_records_box(records_reg, start_date, end_date):
+    regular_items = get_regular_records_in_period(records_reg, start_date, end_date)
+
+    html = "<div class='regular-list-box'>"
+    html += f"<div class='regular-list-title'>📌 현재 신청된 정기대관 내역</div>"
+    html += f"<div style='font-size:13px; margin-bottom:8px;'>조회 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}</div>"
+
+    if not regular_items:
+        html += "<div style='color:#999;'>해당 기간에 등록된 정기대관 신청 내역이 없습니다.</div>"
+    else:
+        for item in regular_items:
+            html += (
+                f"<div class='regular-list-item'>"
+                f"<b>{item['date'].strftime('%m/%d')}({get_day_korean(item['date'])})</b> / "
+                f"{item['start']} - {item['end']} / "
+                f"{mask_name(item['name'])} / "
+                f"{item['purpose']}"
+                f"</div>"
+            )
+
+    html += "</div>"
+
+    st.markdown(html, unsafe_allow_html=True)
 
 # --- 8. 정기대관 월 초기화 실행 ---
 clear_old_regular_records()
@@ -540,35 +634,30 @@ with tab1:
 
                     if not overlap and records_reg:
                         for rr in records_reg[1:]:
-                            try:
-                                if len(rr) < 4:
-                                    continue
+                            item = parse_regular_row(rr)
 
-                                rr_date_str = str(rr[1]).replace(".", "-").replace("/", "-").strip()
-                                rr_date = datetime.strptime(rr_date_str, "%Y-%m-%d").date()
-
-                                if rr_date != date:
-                                    continue
-
-                                reg_s = to_min(str(rr[2]).strip())
-                                reg_e = to_min(str(rr[3]).strip())
-
-                                reg_start_dt = datetime.combine(
-                                    date,
-                                    dt_time(hour=reg_s // 60, minute=reg_s % 60)
-                                )
-
-                                reg_end_dt = datetime.combine(
-                                    date + timedelta(days=1 if reg_e < reg_s else 0),
-                                    dt_time(hour=reg_e // 60, minute=reg_e % 60)
-                                )
-
-                                if (req_start_dt < reg_end_dt) and (req_end_dt > reg_start_dt):
-                                    overlap = True
-                                    break
-
-                            except:
+                            if not item:
                                 continue
+
+                            if item["date"] != date:
+                                continue
+
+                            reg_s = to_min(item["start"])
+                            reg_e = to_min(item["end"])
+
+                            reg_start_dt = datetime.combine(
+                                date,
+                                dt_time(hour=reg_s // 60, minute=reg_s % 60)
+                            )
+
+                            reg_end_dt = datetime.combine(
+                                date + timedelta(days=1 if reg_e < reg_s else 0),
+                                dt_time(hour=reg_e // 60, minute=reg_e % 60)
+                            )
+
+                            if (req_start_dt < reg_end_dt) and (req_end_dt > reg_start_dt):
+                                overlap = True
+                                break
 
                     if overlap:
                         st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
@@ -632,6 +721,8 @@ with tab2:
     st.caption(
         f"선택 가능 기간: {month_start.strftime('%Y-%m-%d')} ~ {month_end.strftime('%Y-%m-%d')}"
     )
+
+    show_regular_records_box(records_reg, month_start, month_end)
 
     with st.form("reg_info_form"):
         reg_date = st.date_input(
@@ -730,27 +821,23 @@ with tab2:
 
                     if len(existing_rows) > 1:
                         for row in existing_rows[1:]:
-                            try:
-                                if len(row) < 6:
-                                    continue
+                            item = parse_regular_row(row)
 
-                                row_date = str(row[1]).replace(".", "-").replace("/", "-").strip()
-                                row_start = str(row[2]).strip()
-                                row_end = str(row[3]).strip()
-                                row_name = str(row[4]).strip()
-                                row_id = str(row[5]).strip()
-
-                                if row_date == date_str and row_name == rep_name and row_id == rep_id:
-                                    rs = to_min(row_start)
-                                    re = to_min(row_end)
-
-                                    if re < rs:
-                                        total_minutes += (24 * 60 - rs) + re
-                                    else:
-                                        total_minutes += re - rs
-
-                            except:
+                            if not item:
                                 continue
+
+                            if (
+                                item["date"] == reg_date
+                                and item["name"] == rep_name
+                                and item["student_id"] == rep_id
+                            ):
+                                rs = to_min(item["start"])
+                                re = to_min(item["end"])
+
+                                if re < rs:
+                                    total_minutes += (24 * 60 - rs) + re
+                                else:
+                                    total_minutes += re - rs
 
                     if records_normal:
                         for row in records_normal:
@@ -837,34 +924,30 @@ with tab2:
 
                         if not overlap and len(existing_rows) > 1:
                             for row in existing_rows[1:]:
-                                try:
-                                    if len(row) < 4:
-                                        continue
+                                item = parse_regular_row(row)
 
-                                    row_date = str(row[1]).replace(".", "-").replace("/", "-").strip()
-
-                                    if row_date != date_str:
-                                        continue
-
-                                    rs = to_min(str(row[2]).strip())
-                                    re = to_min(str(row[3]).strip())
-
-                                    exist_start_dt = datetime.combine(
-                                        reg_date,
-                                        dt_time(hour=rs // 60, minute=rs % 60)
-                                    )
-
-                                    exist_end_dt = datetime.combine(
-                                        reg_date + timedelta(days=1 if re < rs else 0),
-                                        dt_time(hour=re // 60, minute=re % 60)
-                                    )
-
-                                    if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
-                                        overlap = True
-                                        break
-
-                                except:
+                                if not item:
                                     continue
+
+                                if item["date"] != reg_date:
+                                    continue
+
+                                rs = to_min(item["start"])
+                                re = to_min(item["end"])
+
+                                exist_start_dt = datetime.combine(
+                                    reg_date,
+                                    dt_time(hour=rs // 60, minute=rs % 60)
+                                )
+
+                                exist_end_dt = datetime.combine(
+                                    reg_date + timedelta(days=1 if re < rs else 0),
+                                    dt_time(hour=re // 60, minute=re % 60)
+                                )
+
+                                if (req_start_dt < exist_end_dt) and (req_end_dt > exist_start_dt):
+                                    overlap = True
+                                    break
 
                         if overlap:
                             st.error("❌ 신청 불가: 이미 예약 또는 신청된 시간입니다.")
