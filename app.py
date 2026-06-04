@@ -346,6 +346,108 @@ st.markdown("""
         border-bottom: 1px solid #f0f0f0;
     }
 
+    /* 주간 달력: 라이트/다크모드 공통 가독성 보정 */
+    :root {
+        --week-bg: #ffffff;
+        --week-panel-bg: #ffffff;
+        --week-head-bg: #f3f4f6;
+        --week-time-bg: #f9fafb;
+        --week-cell-bg: #ffffff;
+        --week-booked-bg: #f8fbff;
+        --week-border: #d1d5db;
+        --week-text: #111827;
+        --week-subtext: #374151;
+        --week-muted: #6b7280;
+        --normal-bg: #e8f2ff;
+        --normal-text: #174ea6;
+        --normal-border: #bfd7ff;
+        --regular-bg: #fff4e5;
+        --regular-text: #8a4b00;
+        --regular-border: #ffd99a;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --week-bg: #0f172a;
+            --week-panel-bg: #111827;
+            --week-head-bg: #1f2937;
+            --week-time-bg: #111827;
+            --week-cell-bg: #0b1220;
+            --week-booked-bg: #111827;
+            --week-border: #374151;
+            --week-text: #f9fafb;
+            --week-subtext: #e5e7eb;
+            --week-muted: #cbd5e1;
+            --normal-bg: #1e3a5f;
+            --normal-text: #dbeafe;
+            --normal-border: #3b82f6;
+            --regular-bg: #4a3416;
+            --regular-text: #ffedd5;
+            --regular-border: #f59e0b;
+        }
+    }
+
+    .week-wrap {
+        background: var(--week-panel-bg) !important;
+        border-color: var(--week-border) !important;
+        color: var(--week-text) !important;
+    }
+
+    .week-title,
+    .week-guide {
+        color: var(--week-text) !important;
+    }
+
+    .week-grid {
+        border-color: var(--week-border) !important;
+    }
+
+    .week-corner,
+    .week-day-head,
+    .week-time,
+    .week-cell {
+        border-color: var(--week-border) !important;
+        color: var(--week-text) !important;
+    }
+
+    .week-corner,
+    .week-day-head {
+        background: var(--week-head-bg) !important;
+    }
+
+    .week-time {
+        background: var(--week-time-bg) !important;
+    }
+
+    .week-cell {
+        background: var(--week-cell-bg) !important;
+    }
+
+    .week-cell.booked {
+        background: var(--week-booked-bg) !important;
+    }
+
+    .week-event.normal,
+    .event-kind.normal {
+        background: var(--normal-bg) !important;
+        color: var(--normal-text) !important;
+        border-color: var(--normal-border) !important;
+    }
+
+    .week-event.regular,
+    .event-kind.regular {
+        background: var(--regular-bg) !important;
+        color: var(--regular-text) !important;
+        border-color: var(--regular-border) !important;
+    }
+
+    .reservation-link-box {
+        background: var(--week-panel-bg) !important;
+        border-color: var(--week-border) !important;
+        color: var(--week-text) !important;
+    }
+
+
     @media (max-width: 720px) {
         .week-title { font-size: 18px; }
         .week-grid { grid-template-columns: 74px repeat(7, minmax(118px, 1fr)); min-width: 900px; }
@@ -700,6 +802,33 @@ def week_start_monday(base_date):
     return base_date - timedelta(days=base_date.weekday())
 
 
+def get_month_week_options(base_date):
+    """해당 월을 1주차~N주차로 나누어 주간 시작일을 반환합니다."""
+    month_start = base_date.replace(day=1)
+
+    if month_start.month == 12:
+        next_month_start = month_start.replace(year=month_start.year + 1, month=1, day=1)
+    else:
+        next_month_start = month_start.replace(month=month_start.month + 1, day=1)
+
+    month_end = next_month_start - timedelta(days=1)
+    first_week_start = week_start_monday(month_start)
+
+    options = []
+    cur = first_week_start
+    week_no = 1
+
+    while cur <= month_end:
+        options.append({
+            "label": f"{base_date.month}월 {week_no}주차",
+            "week_start": cur
+        })
+        cur += timedelta(days=7)
+        week_no += 1
+
+    return options
+
+
 def add_week_event(events_by_date, event_date, kind, title, start_min, end_min, time_text, extra=""):
     if start_min is None or end_min is None:
         return
@@ -841,26 +970,22 @@ def collect_week_events(records_normal, records_reg, week_start, week_end):
     return events_by_date
 
 
-def render_week_schedule_html(week_start, events_by_date):
+def render_week_schedule_html(week_start, events_by_date, week_label):
     week_days = [week_start + timedelta(days=i) for i in range(7)]
-    week_end = week_days[-1]
     today = datetime.today().date()
 
     html = "<div class='week-wrap'>"
-    html += (
-        f"<div class='week-title'>🗓️ {week_start.strftime('%Y-%m-%d')} ~ "
-        f"{week_end.strftime('%Y-%m-%d')} 주간 대관 시간표</div>"
-    )
+    html += f"<div class='week-title'>🗓️ {escape(week_label)} 대관 시간표</div>"
     html += "<div class='week-guide'>"
     html += "<span class='event-kind normal'>일반대관</span> "
     html += "<span class='event-kind regular'>정기대관</span> "
-    html += "00:00부터 24:00까지 1시간 단위로 표시됩니다. 예약이 걸쳐 있는 시간대에 내역이 표시됩니다."
+    html += "00:00부터 24:00까지 1시간 단위로 표시됩니다."
     html += "</div>"
     html += "<div class='week-grid'>"
     html += "<div class='week-corner'>시간</div>"
 
     for d in week_days:
-        day_label = f"{get_day_korean(d)}<br>{d.strftime('%m/%d')}"
+        day_label = f"{get_day_korean(d)}요일"
         if d == today:
             day_label += "<br><span style='color:#ff4b4b;'>오늘</span>"
         html += f"<div class='week-day-head'>{day_label}</div>"
@@ -887,52 +1012,17 @@ def render_week_schedule_html(week_start, events_by_date):
 
             for event in cell_events:
                 event_class = "regular" if event["kind"] == "regular" else "normal"
-                title = escape(event["title"])
+                kind_label = "정기대관" if event["kind"] == "regular" else "일반대관"
                 time_text = escape(event["time_text"])
                 html += (
-                    f"<div class='week-event {event_class}' title='{title} {time_text}'>"
-                    f"<b>{time_text}</b><br>{title}"
+                    f"<div class='week-event {event_class}' title='{kind_label} {time_text}'>"
+                    f"<b>{time_text}</b><br>{kind_label}"
                     f"</div>"
                 )
 
             html += "</div>"
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def show_week_detail_list(week_start, events_by_date):
-    week_days = [week_start + timedelta(days=i) for i in range(7)]
-    has_any = any(events_by_date.get(d) for d in week_days)
-
-    st.markdown("#### 📌 이번 주 예약 상세")
-
-    if not has_any:
-        st.info("이번 주에 등록된 대관 내역이 없습니다.")
-        return
-
-    html = "<div class='week-detail-wrap'>"
-
-    for d in week_days:
-        events = events_by_date.get(d, [])
-        if not events:
-            continue
-
-        html += f"<div class='week-detail-day'>{d.strftime('%Y-%m-%d')}({get_day_korean(d)})</div>"
-
-        for event in events:
-            kind_label = "정기대관" if event["kind"] == "regular" else "일반대관"
-            time_text = escape(event["time_text"])
-            title = escape(event["title"])
-            extra = escape(event.get("extra", ""))
-            extra_text = f" · {extra}" if extra else ""
-            html += (
-                f"<div class='week-detail-item'>"
-                f"<b>{time_text}</b> · {kind_label} · {title}{extra_text}"
-                f"</div>"
-            )
-
-    html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
 
@@ -951,20 +1041,29 @@ def render_reservation_link():
 
 def show_weekly_schedule_page(records_normal, records_reg):
     today = datetime.today().date()
+    week_options = get_month_week_options(today)
+    labels = [item["label"] for item in week_options]
+    week_map = {item["label"]: item["week_start"] for item in week_options}
+    current_week_start = week_start_monday(today)
 
-    selected_date = st.date_input(
-        "확인할 주 선택",
-        value=today,
-        help="선택한 날짜가 포함된 월요일~일요일 주간 시간표를 보여줍니다.",
-        key="weekly_schedule_selected_date"
+    default_index = 0
+    for idx, item in enumerate(week_options):
+        if item["week_start"] == current_week_start:
+            default_index = idx
+            break
+
+    selected_label = st.selectbox(
+        "확인할 주차 선택",
+        labels,
+        index=default_index,
+        key="weekly_schedule_week_label"
     )
 
-    week_start = week_start_monday(selected_date)
+    week_start = week_map[selected_label]
     week_end = week_start + timedelta(days=6)
     events_by_date = collect_week_events(records_normal, records_reg, week_start, week_end)
 
-    render_week_schedule_html(week_start, events_by_date)
-    show_week_detail_list(week_start, events_by_date)
+    render_week_schedule_html(week_start, events_by_date, selected_label)
 
 # --- 7. 메인 UI 및 로직 ---
 mode = str(get_query_value("mode", "reserve")).lower().strip()
@@ -974,7 +1073,7 @@ records_normal, records_reg = load_data()
 
 if is_calendar_only:
     st.title("공공인재학부 세미나실 대관현황")
-    st.caption("구글시트에 등록된 일반대관/정기대관 내역을 주별·시간대별로 확인하는 전용 화면입니다.")
+    st.caption("구글시트에 등록된 대관 내역을 주차별 시간표로 확인하는 전용 화면입니다.")
     show_weekly_schedule_page(records_normal, records_reg)
     st.caption(
         f"마지막 갱신: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · "
