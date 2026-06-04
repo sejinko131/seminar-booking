@@ -826,10 +826,6 @@ with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
 
 show_status(records_normal, records_reg)
 
-with st.expander("🔗 달력형 현황 전용 링크", expanded=False):
-    st.markdown("QR에는 아래처럼 앱 주소 뒤에 `?mode=calendar`를 붙인 링크를 넣으면 됩니다.")
-    st.code("https://배포주소.streamlit.app/?mode=calendar")
-    st.caption("이 링크로 접속하면 예약 신청 폼과 비밀번호 안내는 보이지 않고, 달력형 대관현황만 표시됩니다.")
 
 success_placeholder = st.empty()
 
