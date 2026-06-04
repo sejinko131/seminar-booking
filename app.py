@@ -1,14 +1,18 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import gspread
 import time
+import calendar
+from html import escape
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta, time as dt_time
 
 # --- 1. 기본 설정 ---
 JSON_FILE = "key.json"
 SHEET_NAME = "세미나실_대관"
+STATUS_REFRESH_SEC = 60  # 현황 전용 화면 자동 새로고침 주기
 
-st.set_page_config(page_title="세미나실 대관시스템", page_icon="📅", layout="centered")
+st.set_page_config(page_title="세미나실 대관시스템", page_icon="📅", layout="wide")
 
 # --- 2. CSS 스타일 ---
 st.markdown("""
@@ -66,8 +70,158 @@ st.markdown("""
     }
 
     div[data-baseweb="input"] { padding: 5px; }
+
+    .calendar-wrap {
+        background: #ffffff;
+        border: 1px solid #dddddd;
+        border-radius: 14px;
+        padding: 14px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }
+
+    .calendar-title {
+        text-align: center;
+        font-weight: 800;
+        font-size: 22px;
+        margin-bottom: 12px;
+        color: #222222;
+    }
+
+    .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    .calendar-head {
+        text-align: center;
+        font-weight: 700;
+        padding: 8px 0;
+        border-radius: 8px;
+        background: #f5f5f5;
+        color: #444444;
+        font-size: 13px;
+    }
+
+    .cal-cell {
+        min-height: 112px;
+        border: 1px solid #e5e5e5;
+        border-radius: 10px;
+        padding: 8px;
+        background: #ffffff;
+        overflow: hidden;
+    }
+
+    .cal-cell.muted {
+        background: #fafafa;
+        color: #aaaaaa;
+    }
+
+    .cal-cell.today {
+        border: 2px solid #ff4b4b;
+    }
+
+    .cal-cell.selected {
+        box-shadow: 0 0 0 3px rgba(255, 75, 75, 0.18) inset;
+    }
+
+    .cal-day-number {
+        font-weight: 800;
+        font-size: 14px;
+        margin-bottom: 5px;
+        color: #222222;
+    }
+
+    .cal-event {
+        font-size: 11px;
+        line-height: 1.25;
+        padding: 4px 5px;
+        margin-top: 4px;
+        border-radius: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .cal-event.normal {
+        background: #e8f2ff;
+        color: #174ea6;
+        border: 1px solid #cfe2ff;
+    }
+
+    .cal-event.regular {
+        background: #fff4e5;
+        color: #9a5b00;
+        border: 1px solid #ffe0ad;
+    }
+
+    .cal-more {
+        font-size: 11px;
+        color: #666666;
+        margin-top: 4px;
+    }
+
+    .event-card {
+        background: #ffffff;
+        border: 1px solid #dddddd;
+        border-radius: 10px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        color: #222222;
+    }
+
+    .event-kind {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 999px;
+        margin-right: 8px;
+    }
+
+    .event-kind.normal {
+        background: #e8f2ff;
+        color: #174ea6;
+    }
+
+    .event-kind.regular {
+        background: #fff4e5;
+        color: #9a5b00;
+    }
+
+    .legend-box {
+        font-size: 13px;
+        color: #444444;
+        margin: 4px 0 12px 0;
+    }
+
+    @media (max-width: 720px) {
+        .block-container { padding-top: 2rem; padding-left: 0.8rem; padding-right: 0.8rem; }
+        .calendar-grid { gap: 3px; }
+        .calendar-head { font-size: 11px; padding: 6px 0; }
+        .cal-cell { min-height: 86px; padding: 5px; border-radius: 7px; }
+        .cal-day-number { font-size: 12px; }
+        .cal-event { font-size: 10px; padding: 3px 4px; }
+        h1 { font-size: 1.45rem !important; }
+    }
+
     </style>
     """, unsafe_allow_html=True)
+
+
+# --- 2-1. URL/화면 헬퍼 ---
+def get_query_value(key, default=""):
+    """Streamlit 버전에 상관없이 URL 쿼리 파라미터 값을 안전하게 읽습니다."""
+    try:
+        value = st.query_params.get(key, default)
+    except Exception:
+        value = st.experimental_get_query_params().get(key, [default])
+
+    if isinstance(value, list):
+        return value[0] if value else default
+
+    return value if value is not None else default
 
 # --- 3. 구글 시트 연결 ---
 @st.cache_resource
@@ -380,7 +534,283 @@ def show_status(records_normal, records_reg):
 
     st.markdown(status_html, unsafe_allow_html=True)
 
+
+
+# --- 6-1. 달력형 현황 화면 ---
+def format_minute(minute_value):
+    try:
+        minute_value = int(minute_value)
+        return f"{(minute_value // 60) % 24:02d}:{minute_value % 60:02d}"
+    except Exception:
+        return ""
+
+
+def month_add(base_date, offset):
+    year = base_date.year + (base_date.month - 1 + offset) // 12
+    month = (base_date.month - 1 + offset) % 12 + 1
+    return base_date.replace(year=year, month=month, day=1)
+
+
+def build_month_options(center_date=None, months_before=1, months_after=4):
+    if center_date is None:
+        center_date = datetime.today().date().replace(day=1)
+
+    options = []
+
+    for offset in range(-months_before, months_after + 1):
+        d = month_add(center_date, offset)
+        options.append({
+            "label": f"{d.year}년 {d.month:02d}월",
+            "year": d.year,
+            "month": d.month,
+            "date": d
+        })
+
+    return options
+
+
+def add_event(events_by_date, event_date, kind, title, time_text, sort_min, extra=""):
+    events_by_date.setdefault(event_date, []).append({
+        "kind": kind,
+        "title": str(title).strip(),
+        "time_text": str(time_text).strip(),
+        "sort_min": sort_min,
+        "extra": str(extra).strip()
+    })
+
+
+def collect_calendar_events(records_normal, records_reg, range_start, range_end):
+    """일반대관과 정기대관을 날짜별 이벤트로 합칩니다."""
+    events_by_date = {}
+
+    # 일반대관: 시트1 컬럼 기준
+    if records_normal:
+        for row in records_normal:
+            try:
+                r_d = parse_date_local(row.get("날짜", ""))
+
+                if not r_d or not (range_start <= r_d <= range_end):
+                    continue
+
+                start = str(row.get("시작시간", "")).strip()
+                end = str(row.get("종료시간", "")).strip()
+                name = str(row.get("대표자명", "")).strip()
+                s_min = to_min(start)
+                e_min = to_min(end)
+                overnight = " (+1)" if e_min < s_min else ""
+                display_name = mask_name(name) if name else "예약자"
+
+                add_event(
+                    events_by_date,
+                    r_d,
+                    "normal",
+                    f"일반대관 · {display_name}",
+                    f"{start} ~ {end}{overnight}",
+                    s_min
+                )
+
+            except Exception:
+                continue
+
+    # 정기대관: 정기대관_신청 컬럼 기준
+    if records_reg and len(records_reg) > 1:
+        for row in records_reg[1:]:
+            try:
+                # 신청일 / 단체명 / 대표자 / 연락처 / 사용기간 / 요일 / 사용시간 / 사용목적
+                if len(row) < 8:
+                    continue
+
+                group_name = str(row[1]).strip() or "정기대관"
+                period_text = str(row[4]).strip()
+                days_text = str(row[5]).strip()
+                time_text = str(row[6]).strip()
+                purpose = str(row[7]).strip()
+
+                period_start, period_end = parse_period_local(period_text)
+                days = normalize_days_text(days_text)
+                reg_s, reg_e = parse_time_range_local(time_text)
+
+                if not period_start or not period_end or not days:
+                    continue
+
+                if reg_s is None or reg_e is None:
+                    continue
+
+                cur = max(range_start, period_start)
+                end_date = min(range_end, period_end)
+
+                while cur <= end_date:
+                    if get_day_korean(cur) in days:
+                        add_event(
+                            events_by_date,
+                            cur,
+                            "regular",
+                            f"정기대관 · {group_name}",
+                            time_text,
+                            reg_s,
+                            purpose
+                        )
+
+                    cur += timedelta(days=1)
+
+            except Exception:
+                continue
+
+    for d in events_by_date:
+        events_by_date[d].sort(key=lambda x: (x["sort_min"], x["kind"], x["title"]))
+
+    return events_by_date
+
+
+def render_calendar_html(year, month, selected_date, events_by_date):
+    cal = calendar.Calendar(firstweekday=0)  # 월요일 시작
+    weeks = cal.monthdatescalendar(year, month)
+    today = datetime.today().date()
+    month_label = f"{year}년 {month:02d}월"
+
+    html = "<div class='calendar-wrap'>"
+    html += f"<div class='calendar-title'>📅 {month_label} 대관 달력</div>"
+    html += "<div class='legend-box'>"
+    html += "<span class='event-kind normal'>일반대관</span> "
+    html += "<span class='event-kind regular'>정기대관</span> "
+    html += "달력의 시간은 이미 예약된 시간입니다."
+    html += "</div>"
+    html += "<div class='calendar-grid'>"
+
+    for day_name in ["월", "화", "수", "목", "금", "토", "일"]:
+        html += f"<div class='calendar-head'>{day_name}</div>"
+
+    for week in weeks:
+        for d in week:
+            classes = ["cal-cell"]
+
+            if d.month != month:
+                classes.append("muted")
+
+            if d == today:
+                classes.append("today")
+
+            if selected_date and d == selected_date:
+                classes.append("selected")
+
+            events = events_by_date.get(d, [])
+            html += f"<div class='{ ' '.join(classes) }'>"
+            html += f"<div class='cal-day-number'>{d.day}</div>"
+
+            for event in events[:3]:
+                event_class = "regular" if event["kind"] == "regular" else "normal"
+                time_text = escape(event["time_text"])
+                title = escape(event["title"])
+                html += f"<div class='cal-event {event_class}' title='{title} {time_text}'>{time_text}</div>"
+
+            if len(events) > 3:
+                html += f"<div class='cal-more'>+{len(events) - 3}건 더 있음</div>"
+
+            html += "</div>"
+
+    html += "</div></div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def show_selected_day_events(selected_date, events_by_date):
+    st.markdown(f"#### 🕒 {selected_date.strftime('%Y-%m-%d')}({get_day_korean(selected_date)}) 예약 시간")
+    events = events_by_date.get(selected_date, [])
+
+    if not events:
+        st.info("해당 날짜에 등록된 대관 내역이 없습니다.")
+        return
+
+    for event in events:
+        kind_class = "regular" if event["kind"] == "regular" else "normal"
+        kind_label = "정기대관" if event["kind"] == "regular" else "일반대관"
+        extra_html = ""
+
+        if event.get("extra"):
+            extra_html = f"<div style='margin-top:6px; font-size:13px; color:#666;'>사용목적: {escape(event['extra'])}</div>"
+
+        st.markdown(
+            f"""
+            <div class='event-card'>
+                <span class='event-kind {kind_class}'>{kind_label}</span>
+                <b>{escape(event['time_text'])}</b><br>
+                <span>{escape(event['title'])}</span>
+                {extra_html}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+def show_calendar_page(records_normal, records_reg):
+    today = datetime.today().date()
+    options = build_month_options(today.replace(day=1), months_before=1, months_after=4)
+
+    query_year = get_query_value("year", "")
+    query_month = get_query_value("month", "")
+    default_index = 1  # 현재 월
+
+    for idx, opt in enumerate(options):
+        if str(opt["year"]) == str(query_year) and str(opt["month"]) == str(query_month):
+            default_index = idx
+            break
+
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        selected_label = st.selectbox(
+            "월 선택",
+            [opt["label"] for opt in options],
+            index=default_index,
+            key="calendar_month_select"
+        )
+
+    selected_option = next(opt for opt in options if opt["label"] == selected_label)
+    year = selected_option["year"]
+    month = selected_option["month"]
+    month_start = selected_option["date"]
+    month_end = month_add(month_start, 1) - timedelta(days=1)
+
+    selected_default = today if (today.year == year and today.month == month) else month_start
+
+    with c2:
+        selected_date = st.date_input(
+            "날짜 선택",
+            value=selected_default,
+            min_value=month_start,
+            max_value=month_end,
+            key=f"calendar_selected_date_{year}_{month}"
+        )
+
+    events_by_date = collect_calendar_events(records_normal, records_reg, month_start, month_end)
+    render_calendar_html(year, month, selected_date, events_by_date)
+    show_selected_day_events(selected_date, events_by_date)
+
 # --- 7. 메인 UI 및 로직 ---
+mode = str(get_query_value("mode", "reserve")).lower().strip()
+is_calendar_only = mode in ["calendar", "status", "view"]
+
+records_normal, records_reg = load_data()
+
+if is_calendar_only:
+    st.title("공공인재학부 세미나실 대관현황")
+    st.caption("구글시트에 등록된 일반대관/정기대관 내역을 달력으로 확인하는 전용 화면입니다.")
+    show_calendar_page(records_normal, records_reg)
+    st.caption(
+        f"마지막 갱신: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · "
+        f"{STATUS_REFRESH_SEC}초마다 자동 새로고침됩니다."
+    )
+    components.html(
+        f"""
+        <script>
+        setTimeout(function() {{
+            window.parent.location.reload();
+        }}, {STATUS_REFRESH_SEC * 1000});
+        </script>
+        """,
+        height=0
+    )
+    st.stop()
+
 st.title("공공인재학부 세미나실 대관시스템")
 
 with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
@@ -394,8 +824,12 @@ with st.expander("📢 이용수칙 및 안내 (필독)", expanded=False):
     </div>
     """, unsafe_allow_html=True)
 
-records_normal, records_reg = load_data()
 show_status(records_normal, records_reg)
+
+with st.expander("🔗 달력형 현황 전용 링크", expanded=False):
+    st.markdown("QR에는 아래처럼 앱 주소 뒤에 `?mode=calendar`를 붙인 링크를 넣으면 됩니다.")
+    st.code("https://배포주소.streamlit.app/?mode=calendar")
+    st.caption("이 링크로 접속하면 예약 신청 폼과 비밀번호 안내는 보이지 않고, 달력형 대관현황만 표시됩니다.")
 
 success_placeholder = st.empty()
 
