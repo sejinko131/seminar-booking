@@ -802,14 +802,26 @@ def week_start_monday(base_date):
     return base_date - timedelta(days=base_date.weekday())
 
 
-def get_month_week_options(base_date):
-    """해당 월을 1주차~N주차로 나누어 주간 시작일을 반환합니다."""
-    month_start = base_date.replace(day=1)
+def get_month_options(base_date):
+    """월 선택창에 표시할 현재 연도의 1월~12월 목록을 반환합니다."""
+    return [
+        {
+            "label": f"{month}월",
+            "year": base_date.year,
+            "month": month
+        }
+        for month in range(1, 13)
+    ]
 
-    if month_start.month == 12:
-        next_month_start = month_start.replace(year=month_start.year + 1, month=1, day=1)
+
+def get_month_week_options(year, month):
+    """선택한 월을 1주차~N주차로 나누어 주간 시작일을 반환합니다."""
+    month_start = datetime(year, month, 1).date()
+
+    if month == 12:
+        next_month_start = datetime(year + 1, 1, 1).date()
     else:
-        next_month_start = month_start.replace(month=month_start.month + 1, day=1)
+        next_month_start = datetime(year, month + 1, 1).date()
 
     month_end = next_month_start - timedelta(days=1)
     first_week_start = week_start_monday(month_start)
@@ -820,7 +832,7 @@ def get_month_week_options(base_date):
 
     while cur <= month_end:
         options.append({
-            "label": f"{base_date.month}월 {week_no}주차",
+            "label": f"{week_no}주차",
             "week_start": cur
         })
         cur += timedelta(days=7)
@@ -1041,29 +1053,51 @@ def render_reservation_link():
 
 def show_weekly_schedule_page(records_normal, records_reg):
     today = datetime.today().date()
-    week_options = get_month_week_options(today)
-    labels = [item["label"] for item in week_options]
+
+    month_options = get_month_options(today)
+    month_labels = [item["label"] for item in month_options]
+    default_month_index = today.month - 1
+
+    col_month, col_week = st.columns(2)
+
+    with col_month:
+        selected_month_label = st.selectbox(
+            "월 선택",
+            month_labels,
+            index=default_month_index,
+            key="weekly_schedule_month_label"
+        )
+
+    selected_month_item = month_options[month_labels.index(selected_month_label)]
+    selected_year = selected_month_item["year"]
+    selected_month = selected_month_item["month"]
+
+    week_options = get_month_week_options(selected_year, selected_month)
+    week_labels = [item["label"] for item in week_options]
     week_map = {item["label"]: item["week_start"] for item in week_options}
     current_week_start = week_start_monday(today)
 
-    default_index = 0
-    for idx, item in enumerate(week_options):
-        if item["week_start"] == current_week_start:
-            default_index = idx
-            break
+    default_week_index = 0
+    if selected_year == today.year and selected_month == today.month:
+        for idx, item in enumerate(week_options):
+            if item["week_start"] == current_week_start:
+                default_week_index = idx
+                break
 
-    selected_label = st.selectbox(
-        "확인할 주차 선택",
-        labels,
-        index=default_index,
-        key="weekly_schedule_week_label"
-    )
+    with col_week:
+        selected_week_label = st.selectbox(
+            "주차 선택",
+            week_labels,
+            index=default_week_index,
+            key=f"weekly_schedule_week_label_{selected_year}_{selected_month}"
+        )
 
-    week_start = week_map[selected_label]
+    week_start = week_map[selected_week_label]
     week_end = week_start + timedelta(days=6)
     events_by_date = collect_week_events(records_normal, records_reg, week_start, week_end)
+    display_label = f"{selected_month}월 {selected_week_label}"
 
-    render_week_schedule_html(week_start, events_by_date, selected_label)
+    render_week_schedule_html(week_start, events_by_date, display_label)
 
 # --- 7. 메인 UI 및 로직 ---
 mode = str(get_query_value("mode", "reserve")).lower().strip()
@@ -1073,7 +1107,7 @@ records_normal, records_reg = load_data()
 
 if is_calendar_only:
     st.title("공공인재학부 세미나실 대관현황")
-    st.caption("구글시트에 등록된 대관 내역을 주차별 시간표로 확인하는 전용 화면입니다.")
+    st.caption("구글시트에 등록된 대관 내역을 월별·주차별 시간표로 확인하는 전용 화면입니다.")
     show_weekly_schedule_page(records_normal, records_reg)
     st.caption(
         f"마지막 갱신: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · "
