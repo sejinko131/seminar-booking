@@ -19,11 +19,33 @@ jobs:
         run: |
           set +e
           URL="https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app"
-          echo "=== ROOT ==="
+          echo "=== ROOT HEAD ==="
           curl -sS -I --max-time 30 "$URL/"
           echo "root_exit=$?"
           echo
-          echo "=== HEALTH ==="
-          curl -sS -i --max-time 30 "$URL/_stcore/health"
+          echo "=== FOLLOW REDIRECTS WITH COOKIE JAR ==="
+          curl -sS -L \
+            --max-redirs 12 \
+            --max-time 60 \
+            -c /tmp/streamlit.cookies \
+            -b /tmp/streamlit.cookies \
+            -o /tmp/body.html \
+            -w 'final_http=%{http_code}\nfinal_url=%{url_effective}\nredirects=%{num_redirects}\n' \
+            "$URL/"
+          echo "follow_exit=$?"
+          echo "body_preview:"
+          head -c 1200 /tmp/body.html || true
           echo
+          echo
+          echo "=== HEALTH WITH COOKIES ==="
+          curl -sS -L \
+            --max-redirs 12 \
+            --max-time 60 \
+            -c /tmp/streamlit.cookies \
+            -b /tmp/streamlit.cookies \
+            -o /tmp/health.txt \
+            -w 'health_http=%{http_code}\nhealth_url=%{url_effective}\nhealth_redirects=%{num_redirects}\n' \
+            "$URL/_stcore/health"
           echo "health_exit=$?"
+          cat /tmp/health.txt || true
+          echo
