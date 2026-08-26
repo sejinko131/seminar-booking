@@ -11,5 +11,9 @@ _original_set_page_config = st.set_page_config
 st.set_page_config = lambda *args, **kwargs: None
 try:
     from app_v2 import *  # noqa: F401,F403
+except Exception as exc:
+    # Surface cloud-only startup errors instead of leaving a blank/black app.
+    st.error("앱 초기화 중 오류가 발생했습니다.")
+    st.exception(exc)
 finally:
     st.set_page_config = _original_set_page_config
