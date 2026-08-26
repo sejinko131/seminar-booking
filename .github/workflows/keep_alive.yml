@@ -1,0 +1,31 @@
+name: Keep Streamlit App Awake
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC. Run every 6 hours.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping-streamlit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping Streamlit app
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-delay 10 \
+            --max-time 60 \
+            --user-agent "seminar-booking-keepalive/1.0" \
+            "https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/" \
+            > /dev/null
+          echo "Streamlit app ping completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
