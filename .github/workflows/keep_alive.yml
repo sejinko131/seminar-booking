@@ -20,16 +20,26 @@ jobs:
 
     steps:
       - name: Ping Streamlit app
+        shell: bash
         run: |
-          curl \
-            --fail \
+          URL="https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/"
+          HTTP_CODE=$(curl \
             --silent \
             --show-error \
-            --location \
             --retry 3 \
             --retry-delay 10 \
             --max-time 60 \
             --user-agent "seminar-booking-keepalive/1.0" \
-            "https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/" \
-            > /dev/null
-          echo "Streamlit app ping completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            "$URL")
+
+          echo "HTTP status: $HTTP_CODE"
+
+          if [[ "$HTTP_CODE" =~ ^[23][0-9][0-9]$ ]]; then
+            echo "Streamlit app ping completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            exit 0
+          fi
+
+          echo "Unexpected HTTP status: $HTTP_CODE"
+          exit 1
