@@ -25,7 +25,7 @@ jobs:
           url = "https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/"
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True, executable_path="/usr/bin/google-chrome", args=["--no-sandbox", "--disable-dev-shm-usage"])
-              page = browser.new_page()
+              page = browser.new_page(viewport={"width": 1440, "height": 1000})
               console = []
               errors = []
               bad_responses = []
@@ -36,17 +36,21 @@ jobs:
               page.on("requestfailed", lambda req: failed_requests.append(f"{req.resource_type} {req.url} :: {req.failure}"))
               try:
                   page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                  page.wait_for_timeout(20000)
+                  page.wait_for_timeout(25000)
                   print("FINAL_URL:", page.url)
                   print("TITLE:", page.title())
                   print("FRAMES_START")
-                  for frame in page.frames:
-                      print(frame.url)
+                  for i, frame in enumerate(page.frames):
+                      print(f"FRAME {i}: {frame.url}")
+                      try:
+                          txt = frame.locator("body").inner_text(timeout=5000)
+                          print(f"FRAME {i} BODY_START")
+                          print(txt[:10000])
+                          print(f"FRAME {i} BODY_END")
+                      except Exception as e:
+                          print(f"FRAME {i} BODY_ERROR: {e}")
                   print("FRAMES_END")
-                  body = page.locator("body").inner_text(timeout=10000)
-                  print("BODY_START")
-                  print(body[:8000])
-                  print("BODY_END")
+                  page.screenshot(path="/tmp/live.png", full_page=True)
                   print("BAD_RESPONSES_START")
                   for line in bad_responses[-100:]: print(line)
                   print("BAD_RESPONSES_END")
