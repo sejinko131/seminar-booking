@@ -47,23 +47,8 @@ jobs:
               --dump-dom \
               "$URL/" > /tmp/rendered.html 2>/tmp/chrome.err
             echo "chrome_exit=$?"
-            echo "--- visible text hints ---"
-            python - <<'PY'
-from html.parser import HTMLParser
-from pathlib import Path
-class P(HTMLParser):
-    def __init__(self):
-        super().__init__(); self.parts=[]
-    def handle_data(self,d):
-        d=' '.join(d.split())
-        if d: self.parts.append(d)
-p=P(); p.feed(Path('/tmp/rendered.html').read_text(errors='ignore'))
-text='\n'.join(p.parts)
-for line in text.splitlines():
-    low=line.lower()
-    if any(k in low for k in ['세미나','error','오류','app','sign in','login','access','sleep','wake','connection','streamlit']):
-        print(line[:500])
-PY
+            echo "--- matching rendered text ---"
+            tr '<>' '\n\n' < /tmp/rendered.html | sed 's/&nbsp;/ /g' | grep -Ei '세미나|error|오류|sign in|login|access|sleep|wake|connection|streamlit' | head -n 120 || true
             echo "--- chrome stderr ---"
             tail -n 80 /tmp/chrome.err || true
           else
