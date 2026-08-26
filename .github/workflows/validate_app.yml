@@ -1,0 +1,22 @@
+name: Validate Booking App
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app.py"
+      - "app_v2.py"
+      - "booking_core.py"
+      - "booking_views.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python files
+        run: python -m py_compile app.py app_v2.py booking_core.py booking_views.py
