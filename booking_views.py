@@ -1,24 +1,19 @@
 import calendar
-from datetime import timedelta
+from datetime import date as date_cls, timedelta
 from html import escape
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 from booking_core import (
-    active_general_for_user,
     general_interval,
     get_day_korean,
     has_remaining_regular,
     mask_name,
     now_kst,
     parse_date,
-    parse_period,
-    parse_time_range,
     regular_records_from_values,
     regular_occurrences,
-    split if False else None,
-    to_min,
 )
 
 STATUS_REFRESH_SEC = 60
@@ -72,7 +67,11 @@ def show_status(records_normal, records_reg_values):
             name = str(row.get("대표자명", "")).strip()
             start_dt, end_dt = general_interval(row)
             if end_dt and end_dt > now:
-                upcoming.append((start_dt, f"<b>{escape(mask_name(name) if name else '예약자')}</b> / {d.strftime('%m/%d')}({get_day_korean(d)}) / {escape(s)} - {escape(e)}"))
+                upcoming.append((
+                    start_dt,
+                    f"<b>{escape(mask_name(name) if name else '예약자')}</b> / "
+                    f"{d.strftime('%m/%d')}({get_day_korean(d)}) / {escape(s)} - {escape(e)}",
+                ))
         except Exception:
             continue
     upcoming.sort(key=lambda x: x[0])
@@ -105,8 +104,8 @@ def week_start_monday(d):
 
 
 def month_week_options(year, month):
-    first = __import__('datetime').date(year, month, 1)
-    last = __import__('datetime').date(year, month, calendar.monthrange(year, month)[1])
+    first = date_cls(year, month, 1)
+    last = date_cls(year, month, calendar.monthrange(year, month)[1])
     cur = week_start_monday(first)
     out = []
     n = 1
@@ -121,20 +120,24 @@ def _split_general_event(row):
     start_dt, end_dt = general_interval(row)
     if not start_dt:
         return []
-    pieces = []
     if start_dt.date() == end_dt.date():
-        pieces.append((start_dt.date(), start_dt.hour * 60 + start_dt.minute, end_dt.hour * 60 + end_dt.minute))
-    else:
-        pieces.append((start_dt.date(), start_dt.hour * 60 + start_dt.minute, 1440))
-        pieces.append((end_dt.date(), 0, end_dt.hour * 60 + end_dt.minute))
-    return pieces
+        return [(start_dt.date(), start_dt.hour * 60 + start_dt.minute, end_dt.hour * 60 + end_dt.minute)]
+    return [
+        (start_dt.date(), start_dt.hour * 60 + start_dt.minute, 1440),
+        (end_dt.date(), 0, end_dt.hour * 60 + end_dt.minute),
+    ]
 
 
 def show_weekly_schedule(records_normal, records_reg_values):
     today = now_kst().date()
     c1, c2 = st.columns(2)
     with c1:
-        month = st.selectbox("월 선택", list(range(1, 13)), index=today.month - 1, format_func=lambda x: f"{x}월")
+        month = st.selectbox(
+            "월 선택",
+            list(range(1, 13)),
+            index=today.month - 1,
+            format_func=lambda x: f"{x}월",
+        )
     options = month_week_options(today.year, month)
     labels = [x[0] for x in options]
     current_start = week_start_monday(today)
@@ -151,19 +154,32 @@ def show_weekly_schedule(records_normal, records_reg_values):
                 events[d].append((s, e, "normal", f"{row.get('시작시간','')}~{row.get('종료시간','')}"))
 
     for rec in regular_records_from_values(records_reg_values or []):
-        for d, sdt, edt in regular_occurrences(rec, week_start - timedelta(days=1), week_end):
+        for _, sdt, edt in regular_occurrences(rec, week_start - timedelta(days=1), week_end):
             if sdt.date() in events:
-                events[sdt.date()].append((sdt.hour * 60 + sdt.minute, 1440 if edt.date() != sdt.date() else edt.hour * 60 + edt.minute, "regular", rec.get("사용시간", "")))
+                events[sdt.date()].append((
+                    sdt.hour * 60 + sdt.minute,
+                    1440 if edt.date() != sdt.date() else edt.hour * 60 + edt.minute,
+                    "regular",
+                    rec.get("사용시간", ""),
+                ))
             if edt.date() != sdt.date() and edt.date() in events:
-                events[edt.date()].append((0, edt.hour * 60 + edt.minute, "regular", rec.get("사용시간", "")))
+                events[edt.date()].append((
+                    0,
+                    edt.hour * 60 + edt.minute,
+                    "regular",
+                    rec.get("사용시간", ""),
+                ))
 
     days = [week_start + timedelta(days=i) for i in range(7)]
-    html = f"<div class='week-wrap'><div class='week-title'>🗓️ {month}월 {escape(week_label)} 대관 시간표</div><div class='week-grid'><div class='week-head'>시간</div>"
+    html = (
+        f"<div class='week-wrap'><div class='week-title'>🗓️ {month}월 {escape(week_label)} 대관 시간표</div>"
+        "<div class='week-grid'><div class='week-head'>시간</div>"
+    )
     for d in days:
         html += f"<div class='week-head'>{get_day_korean(d)}요일<br>{d.strftime('%m/%d')}</div>"
     for hour in range(24):
         hs, he = hour * 60, (hour + 1) * 60
-        html += f"<div class='week-time'>{hour:02d}:00<br>~<br>{(hour+1)%24:02d}:00</div>"
+        html += f"<div class='week-time'>{hour:02d}:00<br>~<br>{(hour + 1) % 24:02d}:00</div>"
         for d in days:
             html += "<div class='week-cell'>"
             for s, e, kind, label in events[d]:
@@ -178,9 +194,15 @@ def show_calendar_only(records_normal, records_reg_values):
     st.title("공공인재학부 세미나실 대관현황")
     st.caption("KST 기준 대관 내역을 월별·주차별로 확인합니다.")
     show_weekly_schedule(records_normal, records_reg_values)
-    st.caption(f"마지막 갱신: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST · {STATUS_REFRESH_SEC}초마다 자동 새로고침")
+    st.caption(
+        f"마지막 갱신: {now_kst().strftime('%Y-%m-%d %H:%M:%S')} KST · "
+        f"{STATUS_REFRESH_SEC}초마다 자동 새로고침"
+    )
     components.html(
         f"<script>setTimeout(function(){{window.parent.location.reload();}}, {STATUS_REFRESH_SEC * 1000});</script>",
         height=0,
     )
-    st.markdown(f"<div style='text-align:center;margin-top:20px'><a href='{RESERVATION_PAGE_URL}' target='_self'>📅 예약창으로 이동</a></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:center;margin-top:20px'><a href='{RESERVATION_PAGE_URL}' target='_self'>📅 예약창으로 이동</a></div>",
+        unsafe_allow_html=True,
+    )
