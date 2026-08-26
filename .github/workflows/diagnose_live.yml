@@ -13,6 +13,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
       - name: Check live app
         shell: bash
@@ -20,13 +21,13 @@ jobs:
           set +e
           URL="https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app"
           echo "=== ROOT HEAD ==="
-          curl -sS -I --max-time 30 "$URL/"
+          curl -sS -I --max-time 20 "$URL/"
           echo "root_exit=$?"
           echo
           echo "=== FOLLOW REDIRECTS WITH COOKIE JAR ==="
           curl -sS -L \
             --max-redirs 12 \
-            --max-time 60 \
+            --max-time 30 \
             -c /tmp/streamlit.cookies \
             -b /tmp/streamlit.cookies \
             -o /tmp/body.html \
@@ -38,17 +39,21 @@ jobs:
           CHROME_BIN=$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)
           echo "chrome=$CHROME_BIN"
           if [ -n "$CHROME_BIN" ]; then
-            "$CHROME_BIN" \
+            timeout 25s "$CHROME_BIN" \
               --headless \
               --disable-gpu \
               --no-sandbox \
               --disable-dev-shm-usage \
-              --virtual-time-budget=15000 \
+              --virtual-time-budget=12000 \
               --dump-dom \
               "$URL/" > /tmp/rendered.html 2>/tmp/chrome.err
             echo "chrome_exit=$?"
             echo "--- matching rendered text ---"
-            tr '<>' '\n\n' < /tmp/rendered.html | sed 's/&nbsp;/ /g' | grep -Ei '세미나|error|오류|sign in|login|access|sleep|wake|connection|streamlit' | head -n 120 || true
+            if [ -s /tmp/rendered.html ]; then
+              tr '<>' '\n\n' < /tmp/rendered.html | sed 's/&nbsp;/ /g' | grep -Ei '세미나|error|오류|sign in|login|access|sleep|wake|connection|streamlit' | head -n 120 || true
+            else
+              echo "No rendered DOM output"
+            fi
             echo "--- chrome stderr ---"
             tail -n 80 /tmp/chrome.err || true
           else
