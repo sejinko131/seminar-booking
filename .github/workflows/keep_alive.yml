@@ -1,10 +1,6 @@
 name: Keep Streamlit App Awake
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/keep_alive.yml"
   schedule:
     # GitHub Actions cron uses UTC. Run every 6 hours.
     - cron: "17 */6 * * *"
