@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "app.py"
       - ".github/workflows/diagnose_browser.yml"
   workflow_dispatch:
 
@@ -13,8 +14,10 @@ permissions:
 jobs:
   diagnose-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
+      - name: Wait for Streamlit redeploy
+        run: sleep 45
       - name: Install Playwright
         run: pip install playwright
       - name: Inspect live app in browser
@@ -50,7 +53,6 @@ jobs:
                       except Exception as e:
                           print(f"FRAME {i} BODY_ERROR: {e}")
                   print("FRAMES_END")
-                  page.screenshot(path="/tmp/live.png", full_page=True)
                   print("BAD_RESPONSES_START")
                   for line in bad_responses[-100:]: print(line)
                   print("BAD_RESPONSES_END")
