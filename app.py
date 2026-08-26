@@ -1383,28 +1383,106 @@ with tab1:
                         st.error("❌ 예약 불가: 이미 예약된 시간입니다.")
 
                     else:
+                        # 화면 표시용 데이터는 15초 캐시를 유지하되,
+                        # 실제 저장 직전에는 시트1을 캐시 없이 다시 읽어 최종 검증합니다.
                         sht = cli.open(SHEET_NAME).worksheet("시트1")
+                        fresh_records = sht.get_all_records()
 
-                        others = ", ".join([
-                            f"{p['name']}({p['id']})"
-                            for p in valid_users[1:]
-                        ])
+                        fresh_duplicate = False
+                        fresh_overlap = False
+                        fresh_block_msg = ""
 
-                        s_str = start_time.strftime("%H:%M")
-                        e_str = end_time.strftime("%H:%M")
+                        # 동일 예약 / 방금 등록된 시간 겹침 재검사
+                        for row in fresh_records:
+                            try:
+                                r_d = parse_date_local(row.get("날짜", ""))
 
-                        sht.append_row([
-                            date_str,
-                            s_str,
-                            e_str,
-                            rep_name,
-                            rep_id,
-                            others
-                        ])
+                                if not r_d:
+                                    continue
 
-                        st.cache_data.clear()
-                        st.session_state["success_msg"] = True
-                        st.rerun()
+                                es = to_min(row.get("시작시간"))
+                                ee = to_min(row.get("종료시간"))
+                                r_rep_id = str(row.get("대표학번", "")).strip()
+
+                                if r_d == date and es == s_min and ee == e_min and r_rep_id == rep_id:
+                                    fresh_duplicate = True
+                                    break
+
+                                exist_start_dt, exist_end_dt = make_dt_range(r_d, es, ee)
+
+                                if is_time_overlap(req_start_dt, req_end_dt, exist_start_dt, exist_end_dt):
+                                    fresh_overlap = True
+                                    break
+
+                            except:
+                                continue
+
+                        # 같은 1회 실시간 조회 결과로 1일 3시간 한도도 다시 확인
+                        if not fresh_duplicate and not fresh_overlap:
+                            for applicant in valid_users:
+                                app_name = applicant["name"].strip()
+                                app_id = applicant["id"].strip()
+                                my_usage_min = 0
+
+                                for row in fresh_records:
+                                    if str(row.get("날짜", "")).replace(".", "-").strip() != date_str:
+                                        continue
+
+                                    es = to_min(row.get("시작시간"))
+                                    ee = to_min(row.get("종료시간"))
+                                    usage = (24 * 60 - es) + ee if ee < es else ee - es
+
+                                    r_n = str(row.get("대표자명", "")).strip()
+                                    r_i = str(row.get("대표학번", "")).strip()
+                                    others_text = str(row.get("동반인원", ""))
+                                    target_str = f"{app_name}({app_id})"
+
+                                    if (
+                                        (r_n == app_name and r_i == app_id)
+                                        or (others_text and others_text != "없음" and target_str in others_text)
+                                    ):
+                                        my_usage_min += usage
+
+                                if my_usage_min + dur > 180:
+                                    fresh_block_msg = (
+                                        f"❌ '{app_name}'님은 금일 이용 한도(3시간)를 초과하게 됩니다.\n"
+                                        f"(이미 {my_usage_min}분 사용 + 신청 {dur}분)"
+                                    )
+                                    break
+
+                        if fresh_duplicate:
+                            st.warning("⚠️ 동일한 예약이 이미 처리되어 추가 저장하지 않았습니다.")
+                            st.cache_data.clear()
+
+                        elif fresh_overlap:
+                            st.error("❌ 예약 불가: 방금 다른 예약이 등록되어 시간이 겹칩니다.")
+                            st.cache_data.clear()
+
+                        elif fresh_block_msg:
+                            st.error(fresh_block_msg)
+                            st.cache_data.clear()
+
+                        else:
+                            others = ", ".join([
+                                f"{p['name']}({p['id']})"
+                                for p in valid_users[1:]
+                            ])
+
+                            s_str = start_time.strftime("%H:%M")
+                            e_str = end_time.strftime("%H:%M")
+
+                            sht.append_row([
+                                date_str,
+                                s_str,
+                                e_str,
+                                rep_name,
+                                rep_id,
+                                others
+                            ])
+
+                            st.cache_data.clear()
+                            st.session_state["success_msg"] = True
+                            st.rerun()
 
                 except Exception as e:
                     st.error(f"오류: {e}")
