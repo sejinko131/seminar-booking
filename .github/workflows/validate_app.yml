@@ -8,6 +8,7 @@ on:
       - "app_v2.py"
       - "booking_core.py"
       - "booking_views.py"
+      - "validation_trigger.txt"
   workflow_dispatch:
 
 permissions:
