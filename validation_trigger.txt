@@ -1,1 +1,1 @@
-validate booking app modules
+validate booking app modules and streamlit runtime
