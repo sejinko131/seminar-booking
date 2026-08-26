@@ -1,6 +1,10 @@
 name: Keep Streamlit App Awake
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/keep_alive.yml"
   schedule:
     # GitHub Actions cron uses UTC. Run every 6 hours.
     - cron: "17 */6 * * *"
@@ -19,23 +23,29 @@ jobs:
         shell: bash
         run: |
           URL="https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/"
+          COOKIE_JAR="/tmp/streamlit.cookies"
+
           HTTP_CODE=$(curl \
             --silent \
             --show-error \
+            --location \
+            --max-redirs 12 \
             --retry 3 \
             --retry-delay 10 \
-            --max-time 60 \
-            --user-agent "seminar-booking-keepalive/1.0" \
+            --max-time 90 \
+            --cookie-jar "$COOKIE_JAR" \
+            --cookie "$COOKIE_JAR" \
+            --user-agent "Mozilla/5.0 seminar-booking-keepalive/2.0" \
             --output /dev/null \
             --write-out "%{http_code}" \
             "$URL")
 
-          echo "HTTP status: $HTTP_CODE"
+          echo "Final HTTP status: $HTTP_CODE"
 
-          if [[ "$HTTP_CODE" =~ ^[23][0-9][0-9]$ ]]; then
-            echo "Streamlit app ping completed at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          if [[ "$HTTP_CODE" == "200" ]]; then
+            echo "Streamlit app session reached successfully at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             exit 0
           fi
 
-          echo "Unexpected HTTP status: $HTTP_CODE"
+          echo "Unexpected final HTTP status: $HTTP_CODE"
           exit 1
