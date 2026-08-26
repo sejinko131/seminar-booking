@@ -1,0 +1,29 @@
+name: Diagnose Live Streamlit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diagnose_live.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check live app
+        shell: bash
+        run: |
+          set +e
+          URL="https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app"
+          echo "=== ROOT ==="
+          curl -sS -I --max-time 30 "$URL/"
+          echo "root_exit=$?"
+          echo
+          echo "=== HEALTH ==="
+          curl -sS -i --max-time 30 "$URL/_stcore/health"
+          echo
+          echo "health_exit=$?"
