@@ -1,0 +1,52 @@
+name: Diagnose Live Browser
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/diagnose_browser.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install Playwright
+        run: pip install playwright
+      - name: Inspect live app in browser
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          url = "https://seminar-booking-yreuvhphdhqjdumy3dvwkm.streamlit.app/"
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True, executable_path="/usr/bin/google-chrome", args=["--no-sandbox", "--disable-dev-shm-usage"])
+              page = browser.new_page()
+              console = []
+              errors = []
+              page.on("console", lambda msg: console.append(f"{msg.type}: {msg.text}"))
+              page.on("pageerror", lambda exc: errors.append(str(exc)))
+              try:
+                  page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                  page.wait_for_timeout(20000)
+                  print("FINAL_URL:", page.url)
+                  print("TITLE:", page.title())
+                  body = page.locator("body").inner_text(timeout=10000)
+                  print("BODY_START")
+                  print(body[:8000])
+                  print("BODY_END")
+                  print("CONSOLE_START")
+                  for line in console[-100:]:
+                      print(line)
+                  print("CONSOLE_END")
+                  print("PAGEERROR_START")
+                  for line in errors[-100:]:
+                      print(line)
+                  print("PAGEERROR_END")
+              finally:
+                  browser.close()
+          PY
