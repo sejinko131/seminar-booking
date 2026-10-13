@@ -1,0 +1,18 @@
+[Unit]
+Description=CAU Public Talent Seminar Booking
+After=network.target
+[Service]
+Type=simple
+User=cau-seminar
+Group=cau-seminar
+WorkingDirectory=/opt/cau-pa-seminar/webapp
+EnvironmentFile=/etc/cau-pa-seminar/environment
+ExecStart=/usr/bin/python3 server.py --port 8769 --db /var/lib/cau-pa-seminar/seminar.sqlite
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cau-pa-seminar
+[Install]
+WantedBy=multi-user.target

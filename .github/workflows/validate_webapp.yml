@@ -1,0 +1,28 @@
+name: Validate Seminar Web App
+on:
+  push:
+    branches: ["feature/seminar-webapp"]
+    paths: ["webapp/**", ".github/workflows/validate_webapp.yml"]
+  pull_request:
+    paths: ["webapp/**", ".github/workflows/validate_webapp.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Python syntax
+        run: python -m py_compile webapp/server.py webapp/test_server.py
+      - name: Check JavaScript syntax
+        run: node --check webapp/public/app.js
+      - name: Booking and HTTP regression tests
+        working-directory: webapp
+        run: python -m unittest -v test_server
