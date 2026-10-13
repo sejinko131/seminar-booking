@@ -1,4 +1,5 @@
 import streamlit as st
+import re
 from datetime import timedelta
 
 from booking_core import (
@@ -34,6 +35,10 @@ st.set_page_config(page_title="세미나실 대관시스템", page_icon="📅", 
 inject_css()
 
 
+def valid_student_id(value):
+    return bool(re.fullmatch(r"[0-9]{8}", str(value).strip()))
+
+
 def get_query_value(key, default=""):
     try:
         value = st.query_params.get(key, default)
@@ -52,6 +57,10 @@ def validate_general_candidate(target_date, start_time, end_time, attendees,
 
     if len(attendees) < 2:
         return "최소 2인 이상 입력해야 합니다. (1인 대관 불가)"
+    if exclude_row is None and any(not valid_student_id(p.get("id", "")) for p in attendees):
+        return "대표자와 동반자 학번은 모두 숫자 8자리로 입력해주세요."
+    if exclude_row is None and any(not p.get("name", "").strip() for p in attendees):
+        return "모든 이용자의 이름과 학번을 입력해주세요."
     if dur > 180:
         return "하루 최대 3시간까지만 가능합니다."
     if dur < 10:
@@ -176,7 +185,7 @@ with tab1:
     with c3:
         end_time = st.time_input("종료", value=min_to_time(16 * 60), step=600, key="general_end")
 
-    st.caption("예약자 명단 (첫 번째가 대표자)")
+    st.caption("예약자 명단 (첫 번째가 대표자 · 학번은 숫자 8자리)")
     for i, person in enumerate(st.session_state.attendees):
         ncol, icol = st.columns([6, 4])
         with ncol:
@@ -187,7 +196,7 @@ with tab1:
             st.session_state.attendees[i]["name"] = value
         with icol:
             value = st.text_input(
-                f"학번{i}", value=person.get("id", ""), placeholder="학번",
+                f"학번{i}", value=person.get("id", ""), placeholder="학번 8자리", max_chars=8,
                 key=f"general_id_{i}", label_visibility="collapsed"
             )
             st.session_state.attendees[i]["id"] = value
@@ -204,7 +213,7 @@ with tab1:
         valid_users = [
             {"name": p["name"].strip(), "id": p["id"].strip()}
             for p in st.session_state.attendees
-            if p.get("name", "").strip() and p.get("id", "").strip()
+            if p.get("name", "").strip() or p.get("id", "").strip()
         ]
 
         try:
@@ -276,7 +285,7 @@ with tab2:
         with rc1:
             reg_name = st.text_input("대표자", placeholder="대표자 이름")
         with rc2:
-            reg_id = st.text_input("대표자 학번", placeholder="학번")
+            reg_id = st.text_input("대표자 학번", placeholder="학번 8자리", max_chars=8)
         contact = st.text_input("연락처", placeholder="예: 010-0000-0000")
         reg_days = st.multiselect("요일", ["월", "화", "수", "목", "금", "토", "일"])
         tc1, tc2 = st.columns(2)
@@ -294,8 +303,8 @@ with tab2:
             st.error("❌ 단체명을 입력해주세요.")
         elif not reg_name.strip():
             st.error("❌ 대표자를 입력해주세요.")
-        elif not reg_id.strip():
-            st.error("❌ 대표자 학번을 입력해주세요.")
+        elif not valid_student_id(reg_id):
+            st.error("❌ 대표자 학번은 숫자 8자리로 입력해주세요.")
         elif not contact.strip():
             st.error("❌ 연락처를 입력해주세요.")
         elif not reg_days:
@@ -359,6 +368,8 @@ with tab3:
             "대표자 학번",
             value=st.session_state.get("manage_lookup_id", ""),
             key="manage_id_input",
+            placeholder="학번 8자리",
+            max_chars=8,
         )
     with q3:
         st.write("")
@@ -368,6 +379,8 @@ with tab3:
     if lookup_clicked:
         if not manage_name.strip() or not manage_id.strip():
             st.error("이름과 학번을 모두 입력해주세요.")
+        elif not valid_student_id(manage_id):
+            st.error("학번은 숫자 8자리로 입력해주세요.")
         else:
             refresh_management_results(manage_name.strip(), manage_id.strip())
 
